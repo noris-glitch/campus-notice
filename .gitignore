@@ -1,0 +1,13 @@
+# Sensitive config files
+config/db.php
+test_config.php
+test_hash.php
+test_login.php
+hash.php
+
+# System files
+.DS_Store
+Thumbs.db
+
+# VS Code settings
+.vscode/
