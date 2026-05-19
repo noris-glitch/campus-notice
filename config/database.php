@@ -1,11 +1,12 @@
 <?php
 $host = getenv('DB_HOST') ?: 'localhost';
-$dbname = getenv('DB_NAME') ?: 'campus_notice';
-$username = getenv('DB_USER') ?: 'root';
+$dbname = getenv('DB_NAME') ?: 'campus_notice_db';
+$username = getenv('DB_USER') ?: 'postgres';
 $password = getenv('DB_PASS') ?: '';
+$port = getenv('DB_PORT') ?: '5432';
 
 try {
-    $pdo = new PDO("mysql:host=$host;dbname=$dbname;charset=utf8mb4", $username, $password);
+    $pdo = new PDO("pgsql:host=$host;port=$port;dbname=$dbname", $username, $password);
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
     $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
 } catch(PDOException $e) {
