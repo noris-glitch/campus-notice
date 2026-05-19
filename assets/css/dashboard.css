@@ -730,76 +730,56 @@ body {
     .sidebar {
         width: 80px;
     }
-    
-    .sidebar .menu-text {
-        display: none;
-    }
-    
-    .sidebar .faculty-info {
-        display: none;
-    }
-    
+    .sidebar .menu-text { display: none; }
+    .sidebar .faculty-info { display: none; }
     .sidebar .menu-section {
         text-align: center;
         padding: 15px 5px 5px 5px;
         font-size: 0;
     }
-    
-    .sidebar .menu-section::first-letter {
-        font-size: 11px;
-    }
-    
-    .main-content {
-        margin-left: 80px;
-    }
-    
-    .top-navbar {
-        padding: 10px 15px;
-        flex-direction: column;
-        gap: 10px;
-    }
-    
-    .page-title {
-        font-size: 1.2rem;
-    }
-    
-    .user-info {
-        width: 100%;
-        justify-content: space-between;
-    }
-    
-    .content-area {
-        padding: 15px;
-    }
-    
-    .stats-grid {
-        grid-template-columns: 1fr;
-    }
-    
-    .form-row {
-        grid-template-columns: 1fr;
-    }
-    
-    .notice-meta {
-        flex-direction: column;
-        align-items: flex-start;
-    }
-    
-    .notification-panel {
-        width: 300px;
-        right: -50px;
-    }
+    .sidebar .menu-section::first-letter { font-size: 11px; }
+    .main-content { margin-left: 80px; }
+    .top-navbar { padding: 10px 15px; }
+    .page-title { font-size: 1.2rem; }
+    .user-info { width: 100%; justify-content: space-between; }
+    .content-area { padding: 15px; }
+    .stats-grid { grid-template-columns: 1fr; }
+    .form-row { grid-template-columns: 1fr; }
+    .notice-meta { flex-direction: column; align-items: flex-start; }
+    .notification-panel { width: 300px; right: -50px; }
 }
 
-@media (max-width: 480px) {
-    .user-name {
-        display: none;
+/* Phone fix - overrides everything above */
+@media (max-width: 576px) {
+    .sidebar {
+        width: 0 !important;
+        overflow: hidden !important;
+        padding: 0 !important;
     }
-    
-    .notification-panel {
-        width: 280px;
-        right: -80px;
+    .main-content {
+        margin-left: 0 !important;
+        width: 100% !important;
     }
+    .top-navbar {
+        padding: 10px !important;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+    .page-title { font-size: 1rem !important; }
+    .user-name { display: none !important; }
+    .content-area { padding: 10px !important; }
+    .stats-grid { grid-template-columns: 1fr !important; }
+    .notice-card { padding: 12px !important; }
+    .notification-panel { width: 260px !important; right: -10px !important; }
+    .data-table { display: block; overflow-x: auto; }
+    .toggle-sidebar { display: none !important; }
+}
+
+@media print {
+    .sidebar, .top-navbar, .toggle-sidebar,
+    .logout-btn, .btn-bookmark { display: none !important; }
+    .main-content { margin-left: 0 !important; }
+    .notice-card { break-inside: avoid; box-shadow: none; border: 1px solid #ddd; }
 }
 
 /* ============================================
@@ -822,5 +802,69 @@ body {
         break-inside: avoid;
         box-shadow: none;
         border: 1px solid #ddd;
+    }
+}
+/* ============================================
+   MOBILE PHONE FIX (max-width: 576px)
+   ============================================ */
+@media (max-width: 576px) {
+    .sidebar {
+        width: 0;
+        overflow: hidden;
+        padding: 0;
+    }
+
+    .sidebar.mobile-open {
+        width: 280px;
+    }
+
+    .main-content {
+        margin-left: 0 !important;
+        width: 100%;
+    }
+
+    .top-navbar {
+        padding: 10px;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+
+    .page-title {
+        font-size: 1rem;
+    }
+
+    .user-name {
+        display: none;
+    }
+
+    .content-area {
+        padding: 10px;
+    }
+
+    .stats-grid {
+        grid-template-columns: 1fr;
+        gap: 10px;
+    }
+
+    .notice-card {
+        padding: 12px;
+    }
+
+    .notification-panel {
+        width: 260px;
+        right: -10px;
+    }
+
+    .data-table {
+        display: block;
+        overflow-x: auto;
+    }
+
+    .form-row {
+        grid-template-columns: 1fr;
+    }
+
+    .toggle-sidebar {
+        display: none;
     }
 }

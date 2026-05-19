@@ -1,9 +1,9 @@
 <?php
 // Database configuration for JOOUST Campus Notice System
-$host = 'localhost';
-$dbname = 'campus-notice';  // Your database name with hyphen
-$username = 'root';
-$password = '';
+$host = 'sql306.infinityfree.com';
+$dbname = 'if0_41951297_campusnotice';  // Your database name with hyphen
+$username = 'if0_41951297';
+$password = 'wz8Hp4hNrjcYz';
 
 // Enable error reporting for debugging (disable in production)
 error_reporting(E_ALL);

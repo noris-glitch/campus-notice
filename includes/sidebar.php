@@ -489,6 +489,20 @@ if(isset($_SESSION['user_id']) && $user_role == 'super_admin') {
         display: none;
     }
 }
+@media (max-width: 576px) {
+    .sidebar {
+        width: 0 !important;
+        overflow: hidden !important;
+        padding: 0 !important;
+        min-width: 0 !important;
+    }
+    .sidebar-header,
+    .faculty-info,
+    .menu-section,
+    .menu-item {
+        display: none !important;
+    }
+}
 </style>
 
 <script>
@@ -524,4 +538,11 @@ document.addEventListener('DOMContentLoaded', function() {
         if(toggleIcon) toggleIcon.textContent = '▶';
     }
 });
+// Auto-collapse on mobile
+if (window.innerWidth <= 576) {
+    const sidebar = document.getElementById('sidebar');
+    const mainContent = document.querySelector('.main-content');
+    if(sidebar) sidebar.classList.add('collapsed');
+    if(mainContent) mainContent.style.marginLeft = '0';
+}
 </script>

@@ -11,3 +11,4 @@ Thumbs.db
 
 # VS Code settings
 .vscode/
+config/database.php
