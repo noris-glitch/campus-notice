@@ -1,13 +1,8 @@
 <?php
-// Database configuration for JOOUST Campus Notice System
-$host = 'sql306.infinityfree.com';
-$dbname = 'if0_41951297_campusnotice';  // Your database name with hyphen
-$username = 'if0_41951297';
-$password = 'wz8Hp4hNrjcYz';
-
-// Enable error reporting for debugging (disable in production)
-error_reporting(E_ALL);
-ini_set('display_errors', 1);
+$host = getenv('DB_HOST') ?: 'localhost';
+$dbname = getenv('DB_NAME') ?: 'campus_notice';
+$username = getenv('DB_USER') ?: 'root';
+$password = getenv('DB_PASS') ?: '';
 
 try {
     $pdo = new PDO("mysql:host=$host;dbname=$dbname;charset=utf8mb4", $username, $password);
@@ -17,15 +12,12 @@ try {
     die("Connection failed: " . $e->getMessage());
 }
 
-// Start session if not already started
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-// Function to get faculty name by ID
 function getFacultyName($pdo, $faculty_id) {
     if (!$faculty_id) return 'All Faculties';
-    
     try {
         $stmt = $pdo->prepare("SELECT name FROM faculties WHERE id = ?");
         $stmt->execute([$faculty_id]);
@@ -36,7 +28,6 @@ function getFacultyName($pdo, $faculty_id) {
     }
 }
 
-// Function to get all faculties
 function getAllFaculties($pdo) {
     try {
         $stmt = $pdo->query("SELECT * FROM faculties ORDER BY name");
@@ -46,34 +37,23 @@ function getAllFaculties($pdo) {
     }
 }
 
-// Function to get user role display name
 function getRoleDisplayName($role, $admin_type = null) {
     switch($role) {
-        case 'super_admin':
-            return 'Super Administrator';
+        case 'super_admin': return 'Super Administrator';
         case 'admin':
             switch($admin_type) {
-                case 'dean_of_students':
-                    return 'Dean of Students';
-                case 'hod':
-                    return 'Head of Faculty';
-                case 'student_leader':
-                    return 'Student Leader';
-                case 'club_leader':
-                    return 'Club Leader';
-                case 'faculty':
-                    return 'Faculty Member';
-                default:
-                    return 'Administrator';
+                case 'dean_of_students': return 'Dean of Students';
+                case 'hod': return 'Head of Faculty';
+                case 'student_leader': return 'Student Leader';
+                case 'club_leader': return 'Club Leader';
+                case 'faculty': return 'Faculty Member';
+                default: return 'Administrator';
             }
-        case 'student':
-            return 'Student';
-        default:
-            return 'User';
+        case 'student': return 'Student';
+        default: return 'User';
     }
 }
 
-// Function to get unread notification count
 function getUnreadNotificationCount($pdo, $user_id) {
     try {
         $stmt = $pdo->prepare("SELECT COUNT(*) FROM notifications WHERE user_id = ? AND is_read = 0");
@@ -84,14 +64,9 @@ function getUnreadNotificationCount($pdo, $user_id) {
     }
 }
 
-// Function to get user's faculty
 function getUserFaculty($pdo, $user_id) {
     try {
-        $stmt = $pdo->prepare("
-            SELECT f.* FROM faculties f 
-            JOIN users u ON u.faculty_id = f.id 
-            WHERE u.id = ?
-        ");
+        $stmt = $pdo->prepare("SELECT f.* FROM faculties f JOIN users u ON u.faculty_id = f.id WHERE u.id = ?");
         $stmt->execute([$user_id]);
         return $stmt->fetch();
     } catch (PDOException $e) {
@@ -99,21 +74,14 @@ function getUserFaculty($pdo, $user_id) {
     }
 }
 
-// Function to log user activity
 function logActivity($pdo, $user_id, $action, $details = null) {
     try {
-        $stmt = $pdo->prepare("
-            INSERT INTO user_activity_log (user_id, action, details, ip_address) 
-            VALUES (?, ?, ?, ?)
-        ");
+        $stmt = $pdo->prepare("INSERT INTO user_activity_log (user_id, action, details, ip_address) VALUES (?, ?, ?, ?)");
         $ip = $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0';
         $stmt->execute([$user_id, $action, $details, $ip]);
-    } catch(PDOException $e) {
-        // Silently fail if activity log table doesn't exist
-    }
+    } catch(PDOException $e) {}
 }
 
-// Function to check if a column exists in a table
 function columnExists($pdo, $table, $column) {
     try {
         $stmt = $pdo->prepare("SHOW COLUMNS FROM `$table` LIKE ?");
@@ -124,14 +92,9 @@ function columnExists($pdo, $table, $column) {
     }
 }
 
-// Function to get target column for notices (faculty_target or department_target)
 function getNoticeTargetColumn($pdo) {
-    if (columnExists($pdo, 'notices', 'faculty_target')) {
-        return 'faculty_target';
-    }
-    if (columnExists($pdo, 'notices', 'department_target')) {
-        return 'department_target';
-    }
+    if (columnExists($pdo, 'notices', 'faculty_target')) return 'faculty_target';
+    if (columnExists($pdo, 'notices', 'department_target')) return 'department_target';
     return null;
 }
 
