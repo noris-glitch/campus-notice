@@ -179,6 +179,45 @@ if (!function_exists('ensureFeatureSchema')) {
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         ");
 
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS `shorts` (
+                `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+                `title` VARCHAR(160) NOT NULL DEFAULT '',
+                `caption` TEXT NOT NULL,
+                `video_filename` VARCHAR(255) NOT NULL,
+                `duration_seconds` TINYINT UNSIGNED NOT NULL,
+                `posted_by` INT UNSIGNED NOT NULL,
+                `faculty_target` INT UNSIGNED NULL,
+                `department_id` INT UNSIGNED NULL,
+                `year_target` TINYINT UNSIGNED NULL,
+                `audience_roles_csv` VARCHAR(100) NULL,
+                `status` VARCHAR(20) NOT NULL DEFAULT 'published',
+                `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                PRIMARY KEY (`id`),
+                KEY `idx_shorts_posted_by` (`posted_by`),
+                KEY `idx_shorts_status` (`status`),
+                KEY `idx_shorts_faculty_target` (`faculty_target`),
+                KEY `idx_shorts_department_id` (`department_id`),
+                CONSTRAINT `fk_shorts_posted_by` FOREIGN KEY (`posted_by`) REFERENCES `users` (`id`) ON DELETE CASCADE ON UPDATE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        ");
+
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS `short_views` (
+                `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+                `short_id` INT UNSIGNED NOT NULL,
+                `user_id` INT UNSIGNED NOT NULL,
+                `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (`id`),
+                UNIQUE KEY `ux_short_views_short_user` (`short_id`, `user_id`),
+                KEY `idx_short_views_short` (`short_id`),
+                KEY `idx_short_views_user` (`user_id`),
+                CONSTRAINT `fk_short_views_short` FOREIGN KEY (`short_id`) REFERENCES `shorts` (`id`) ON DELETE CASCADE ON UPDATE CASCADE,
+                CONSTRAINT `fk_short_views_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE ON UPDATE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        ");
+
         $columns = [
             'priority' => "ALTER TABLE `notices` ADD COLUMN `priority` VARCHAR(20) NOT NULL DEFAULT 'normal' AFTER `category`",
             'requires_acknowledgement' => "ALTER TABLE `notices` ADD COLUMN `requires_acknowledgement` TINYINT(1) NOT NULL DEFAULT 0 AFTER `is_pinned`",
@@ -479,6 +518,36 @@ if (!function_exists('buildNoticeAudienceConditions')) {
         }
 
         if (featureColumnExists($pdo, 'notices', 'audience_roles_csv')) {
+            $conditions[] = "($alias.audience_roles_csv IS NULL OR $alias.audience_roles_csv = '' OR FIND_IN_SET(?, $alias.audience_roles_csv) > 0)";
+            $params[] = trim((string) ($user['role'] ?? ''));
+        }
+
+        return [$conditions, $params];
+    }
+}
+
+if (!function_exists('buildShortAudienceConditions')) {
+    function buildShortAudienceConditions(PDO $pdo, string $alias, array $user): array
+    {
+        $conditions = [];
+        $params = [];
+
+        if (featureColumnExists($pdo, 'shorts', 'faculty_target')) {
+            $conditions[] = "($alias.faculty_target IS NULL OR $alias.faculty_target = 0 OR $alias.faculty_target = ?)";
+            $params[] = featureNullableInt($user['faculty_id'] ?? null);
+        }
+
+        if (featureColumnExists($pdo, 'shorts', 'department_id')) {
+            $conditions[] = "($alias.department_id IS NULL OR $alias.department_id = 0 OR $alias.department_id = ?)";
+            $params[] = featureNullableInt($user['department_id'] ?? null);
+        }
+
+        if (featureColumnExists($pdo, 'shorts', 'year_target')) {
+            $conditions[] = "($alias.year_target IS NULL OR $alias.year_target = 0 OR $alias.year_target = ?)";
+            $params[] = featureNullableInt($user['year'] ?? null);
+        }
+
+        if (featureColumnExists($pdo, 'shorts', 'audience_roles_csv')) {
             $conditions[] = "($alias.audience_roles_csv IS NULL OR $alias.audience_roles_csv = '' OR FIND_IN_SET(?, $alias.audience_roles_csv) > 0)";
             $params[] = trim((string) ($user['role'] ?? ''));
         }
@@ -893,6 +962,13 @@ if (!function_exists('buildNoticeSmsBody')) {
         }
 
         return substr($message, 0, 320);
+    }
+}
+
+if (!function_exists('smsGatewayConfigured')) {
+    function smsGatewayConfigured(): bool
+    {
+        return trim((string) getenv('SMS_GATEWAY_URL')) !== '';
     }
 }
 

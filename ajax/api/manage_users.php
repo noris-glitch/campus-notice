@@ -59,6 +59,8 @@ function apiFetchManagedUserStats(PDO $pdo, int $currentUserId): array
         'total_admins' => (int) $pdo->query("SELECT COUNT(*) FROM users WHERE role = 'admin'")->fetchColumn(),
         'total_students' => (int) $pdo->query("SELECT COUNT(*) FROM users WHERE role = 'student'")->fetchColumn(),
         'active_users' => (int) $pdo->query("SELECT COUNT(*) FROM users WHERE is_active = 1")->fetchColumn(),
+        'students_missing_departments' => (int) $pdo->query("SELECT COUNT(*) FROM users WHERE role = 'student' AND (department_id IS NULL OR department_id = 0)")->fetchColumn(),
+        'students_missing_phone_numbers' => (int) $pdo->query("SELECT COUNT(*) FROM users WHERE role = 'student' AND (phone_number IS NULL OR TRIM(phone_number) = '')")->fetchColumn(),
     ];
 }
 

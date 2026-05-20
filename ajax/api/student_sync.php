@@ -16,7 +16,70 @@ function apiStudentSyncMeta(): array
 {
     return [
         'sample_columns' => ['student_id', 'email', 'name', 'faculty', 'faculty_id', 'department', 'department_id', 'phone_number', 'year', 'membership'],
-        'note' => 'This sync updates existing student accounts by student_id or email. Unmatched rows are skipped.',
+        'note' => 'This sync updates existing student accounts by student_id or email. Use it to backfill departments and phone numbers in bulk. Unmatched rows are skipped.',
+    ];
+}
+
+function apiStudentBackfillSummary(PDO $pdo, array $user): array
+{
+    $conditions = ["u.role = 'student'"];
+    $params = [];
+
+    if (($user['role'] ?? '') === 'admin' && !empty($user['faculty_id'])) {
+        $conditions[] = 'u.faculty_id = ?';
+        $params[] = (int) $user['faculty_id'];
+    }
+
+    $whereSql = implode(' AND ', $conditions);
+
+    $statsStmt = $pdo->prepare("
+        SELECT
+            COUNT(*) AS total_students,
+            SUM(CASE WHEN u.department_id IS NULL OR u.department_id = 0 THEN 1 ELSE 0 END) AS missing_departments,
+            SUM(CASE WHEN u.phone_number IS NULL OR TRIM(u.phone_number) = '' THEN 1 ELSE 0 END) AS missing_phone_numbers,
+            SUM(
+                CASE
+                    WHEN (u.department_id IS NULL OR u.department_id = 0)
+                        AND (u.phone_number IS NULL OR TRIM(u.phone_number) = '')
+                    THEN 1
+                    ELSE 0
+                END
+            ) AS missing_both
+        FROM users u
+        WHERE {$whereSql}
+    ");
+    $statsStmt->execute($params);
+    $stats = $statsStmt->fetch() ?: [];
+
+    $samplesStmt = $pdo->prepare("
+        SELECT
+            u.id,
+            u.name,
+            u.email,
+            u.student_id,
+            u.phone_number,
+            f.name AS faculty_name
+        FROM users u
+        LEFT JOIN faculties f ON u.faculty_id = f.id
+        WHERE {$whereSql}
+            AND ((u.department_id IS NULL OR u.department_id = 0) OR (u.phone_number IS NULL OR TRIM(u.phone_number) = ''))
+        ORDER BY u.name
+        LIMIT 8
+    ");
+    $samplesStmt->execute($params);
+
+    $totalStudents = (int) ($stats['total_students'] ?? 0);
+    $missingDepartments = (int) ($stats['missing_departments'] ?? 0);
+    $missingPhoneNumbers = (int) ($stats['missing_phone_numbers'] ?? 0);
+    $missingBoth = (int) ($stats['missing_both'] ?? 0);
+
+    return [
+        'total_students' => $totalStudents,
+        'missing_departments' => $missingDepartments,
+        'missing_phone_numbers' => $missingPhoneNumbers,
+        'missing_both' => $missingBoth,
+        'ready_profiles' => max(0, $totalStudents - ($missingDepartments + $missingPhoneNumbers - $missingBoth)),
+        'samples' => $samplesStmt->fetchAll(),
     ];
 }
 
@@ -30,6 +93,7 @@ try {
             'updated' => 0,
             'skipped' => 0,
             'issues' => [],
+            'backfill_summary' => apiStudentBackfillSummary($pdo, $user),
         ], apiStudentSyncMeta()));
     }
 
@@ -175,6 +239,7 @@ try {
     apiRespond(200, array_merge([
         'success' => true,
         'message' => 'Updated ' . $results['updated'] . ' student records. Skipped ' . $results['skipped'] . ' rows.',
+        'backfill_summary' => apiStudentBackfillSummary($pdo, $user),
     ], $results, apiStudentSyncMeta()));
 } catch (PDOException $e) {
     apiRespond(500, ['success' => false, 'error' => 'Student sync failed right now']);

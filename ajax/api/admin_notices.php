@@ -27,6 +27,10 @@ try {
             'priorities' => apiAdminPriorities(),
             'years' => apiAdminYears(),
             'recurrence_options' => apiRecurrenceOptions(),
+            'sms_gateway_ready' => smsGatewayConfigured(),
+            'sms_gateway_message' => smsGatewayConfigured()
+                ? null
+                : 'Render still needs SMS_GATEWAY_URL, SMS_GATEWAY_TOKEN, and SMS_SENDER_ID set before SMS delivery can succeed.',
         ]);
     }
 
