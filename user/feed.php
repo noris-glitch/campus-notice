@@ -245,7 +245,7 @@ $categories = getAvailableNoticeCategories();
         .notification-dropdown { position: relative; display: inline-block; margin-right: 15px; }
         .notification-bell { background: none; border: none; font-size: 1.5rem; cursor: pointer; position: relative; padding: 5px; }
         .bell-badge { position: absolute; top: -5px; right: -8px; background: #ff4757; color: white; border-radius: 50%; padding: 2px 6px; font-size: 10px; min-width: 18px; text-align: center; }
-        .notification-panel { display: none; position: absolute; right: 0; top: 40px; width: 350px; background: white; border-radius: 10px; box-shadow: 0 5px 20px rgba(0,0,0,0.2); z-index: 1000; max-height: 400px; overflow-y: auto; }
+        .notification-panel { display: none; position: absolute; right: 0; top: 40px; width: min(350px, calc(100vw - 32px)); background: white; border-radius: 10px; box-shadow: 0 5px 20px rgba(0,0,0,0.2); z-index: 1000; max-height: 400px; overflow-y: auto; }
         .notification-panel.show { display: block; }
         .notification-header { padding: 15px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; }
         .notification-item { padding: 12px 15px; border-bottom: 1px solid #f0f0f0; cursor: pointer; display: flex; gap: 10px; }
@@ -256,6 +256,76 @@ $categories = getAvailableNoticeCategories();
             padding: 60px 20px;
             text-align: center;
             color: #6b7280;
+        }
+
+        @media (max-width: 576px) {
+            .hero-card {
+                padding: 18px 16px;
+            }
+
+            .feed-toolbar {
+                padding: 16px;
+            }
+
+            .hero-meta,
+            .filter-buttons {
+                gap: 8px;
+            }
+
+            .filter-buttons {
+                overflow-x: auto;
+                flex-wrap: nowrap;
+                padding-bottom: 4px;
+            }
+
+            .filter-btn {
+                flex: 0 0 auto;
+            }
+
+            .notice-card {
+                padding: 16px;
+                overflow: hidden;
+            }
+
+            .notice-title {
+                font-size: 1.05rem;
+                line-height: 1.35;
+            }
+
+            .notice-summary {
+                font-size: 14px;
+                line-height: 1.6;
+                overflow-wrap: anywhere;
+            }
+
+            .notice-meta,
+            .notice-actions {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+
+            .notice-stats {
+                width: 100%;
+                justify-content: space-between;
+            }
+
+            .notification-dropdown {
+                margin-right: 0;
+            }
+
+            .notification-panel {
+                position: fixed;
+                top: 78px;
+                left: 12px;
+                right: 12px;
+                width: auto;
+                max-height: calc(100vh - 110px);
+            }
+
+            .notification-header {
+                flex-wrap: wrap;
+                gap: 8px;
+            }
         }
     </style>
 </head>
