@@ -55,6 +55,9 @@ if(isset($_SESSION['user_id']) && $user_role == 'super_admin') {
 }
 ?>
 
+<button class="mobile-toggle" id="mobileToggle" type="button" aria-label="Toggle navigation" onclick="toggleSidebar()">☰</button>
+<div class="sidebar-backdrop" id="sidebarBackdrop" onclick="closeMobileSidebar()"></div>
+
 <div class="sidebar" id="sidebar">
     <div class="sidebar-header">
         <button class="toggle-sidebar-top" onclick="toggleSidebar()" title="Toggle Sidebar">
@@ -249,6 +252,11 @@ if(isset($_SESSION['user_id']) && $user_role == 'super_admin') {
 <?php endif; ?>
 
 <style>
+.mobile-toggle,
+.sidebar-backdrop {
+    display: none;
+}
+
 /* Sidebar Styles */
 .sidebar {
     width: 280px;
@@ -490,27 +498,133 @@ if(isset($_SESSION['user_id']) && $user_role == 'super_admin') {
     }
 }
 @media (max-width: 576px) {
-    .sidebar {
-        width: 0 !important;
-        overflow: hidden !important;
-        padding: 0 !important;
-        min-width: 0 !important;
+    .mobile-toggle {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        position: fixed;
+        top: 10px;
+        left: 10px;
+        z-index: 1200;
+        width: 42px;
+        height: 42px;
+        background: #2c3e50;
+        color: white;
+        border: none;
+        border-radius: 10px;
+        font-size: 22px;
+        cursor: pointer;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.25);
     }
-    .sidebar-header,
-    .faculty-info,
-    .menu-section,
-    .menu-item {
-        display: none !important;
+    .sidebar-backdrop {
+        display: block;
+        position: fixed;
+        inset: 0;
+        background: rgba(15, 23, 42, 0.45);
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.25s ease;
+        z-index: 1090;
+    }
+    .sidebar-backdrop.show {
+        opacity: 1;
+        pointer-events: auto;
+    }
+    .sidebar {
+        width: 280px !important;
+        min-width: 0 !important;
+        transform: translateX(-100%);
+        overflow-y: auto !important;
+        overflow-x: hidden !important;
+        box-shadow: 6px 0 18px rgba(0,0,0,0.2);
+    }
+    .sidebar.mobile-open {
+        transform: translateX(0);
+    }
+    .sidebar.collapsed {
+        width: 280px !important;
+        transform: translateX(-100%);
+    }
+    .sidebar.mobile-open.collapsed {
+        transform: translateX(0);
+    }
+    .sidebar .menu-text {
+        display: inline !important;
+    }
+    .sidebar .faculty-info {
+        display: block !important;
+    }
+    .sidebar .menu-section {
+        text-align: left !important;
+        padding: 15px 20px 5px 20px !important;
+        font-size: 11px !important;
+    }
+    .sidebar .sidebar-header h3 {
+        font-size: 1.3rem !important;
+    }
+    .sidebar .toggle-sidebar-top {
+        display: none;
+    }
+    .main-content,
+    .main-content.expanded {
+        margin-left: 0 !important;
+        width: 100% !important;
+    }
+    .top-navbar {
+        padding-left: 60px !important;
     }
 }
 </style>
 
 <script>
+function isMobileSidebarViewport() {
+    return window.innerWidth <= 576;
+}
+
+function getSidebarElements() {
+    return {
+        sidebar: document.getElementById('sidebar'),
+        mainContent: document.querySelector('.main-content'),
+        toggleIcon: document.getElementById('toggle-icon'),
+        mobileToggle: document.getElementById('mobileToggle'),
+        backdrop: document.getElementById('sidebarBackdrop'),
+    };
+}
+
+function setMobileSidebarState(isOpen) {
+    const { sidebar, mainContent, mobileToggle, backdrop } = getSidebarElements();
+    if (!sidebar) return;
+
+    sidebar.classList.remove('collapsed');
+    sidebar.classList.toggle('mobile-open', isOpen);
+    if (mainContent) {
+        mainContent.classList.add('expanded');
+    }
+    if (mobileToggle) {
+        mobileToggle.textContent = isOpen ? '✕' : '☰';
+    }
+    if (backdrop) {
+        backdrop.classList.toggle('show', isOpen);
+    }
+    document.body.style.overflow = isOpen ? 'hidden' : '';
+}
+
+function closeMobileSidebar() {
+    if (!isMobileSidebarViewport()) return;
+    setMobileSidebarState(false);
+}
+
 function toggleSidebar() {
-    const sidebar = document.getElementById('sidebar');
-    const mainContent = document.querySelector('.main-content');
-    const toggleIcon = document.getElementById('toggle-icon');
-    
+    if (isMobileSidebarViewport()) {
+        const { sidebar } = getSidebarElements();
+        if (!sidebar) return;
+        setMobileSidebarState(!sidebar.classList.contains('mobile-open'));
+        return;
+    }
+
+    const { sidebar, mainContent, toggleIcon } = getSidebarElements();
+    if (!sidebar) return;
+
     sidebar.classList.toggle('collapsed');
     if(mainContent) {
         mainContent.classList.toggle('expanded');
@@ -525,24 +639,40 @@ function toggleSidebar() {
     }
 }
 
-// Load sidebar state from localStorage
-document.addEventListener('DOMContentLoaded', function() {
-    const isCollapsed = localStorage.getItem('sidebarCollapsed') === 'true';
-    if(isCollapsed) {
-        const sidebar = document.getElementById('sidebar');
-        const mainContent = document.querySelector('.main-content');
-        const toggleIcon = document.getElementById('toggle-icon');
-        
-        if(sidebar) sidebar.classList.add('collapsed');
-        if(mainContent) mainContent.classList.add('expanded');
-        if(toggleIcon) toggleIcon.textContent = '▶';
+function syncSidebarForViewport() {
+    const { sidebar, mainContent, toggleIcon } = getSidebarElements();
+    if (!sidebar) return;
+
+    if (isMobileSidebarViewport()) {
+        if (mainContent) {
+            mainContent.classList.add('expanded');
+        }
+        if (toggleIcon) {
+            toggleIcon.textContent = '☰';
+        }
+        setMobileSidebarState(false);
+        return;
     }
-});
-// Auto-collapse on mobile
-if (window.innerWidth <= 576) {
-    const sidebar = document.getElementById('sidebar');
-    const mainContent = document.querySelector('.main-content');
-    if(sidebar) sidebar.classList.add('collapsed');
-    if(mainContent) mainContent.style.marginLeft = '0';
+
+    document.body.style.overflow = '';
+    sidebar.classList.remove('mobile-open');
+    const backdrop = document.getElementById('sidebarBackdrop');
+    if (backdrop) {
+        backdrop.classList.remove('show');
+    }
+
+    const isCollapsed = localStorage.getItem('sidebarCollapsed') === 'true';
+    sidebar.classList.toggle('collapsed', isCollapsed);
+    if (mainContent) {
+        mainContent.classList.toggle('expanded', isCollapsed);
+    }
+    if (toggleIcon) {
+        toggleIcon.textContent = isCollapsed ? '▶' : '☰';
+    }
 }
+
+document.addEventListener('DOMContentLoaded', function() {
+    syncSidebarForViewport();
+    window.addEventListener('resize', syncSidebarForViewport);
+});
 </script>
