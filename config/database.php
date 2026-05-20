@@ -1,14 +1,22 @@
 <?php
 $host = getenv('DB_HOST') ?: 'localhost';
-$dbname = getenv('DB_NAME') ?: 'campus_notice_db';
-$username = getenv('DB_USER') ?: 'postgres';
+$dbname = getenv('DB_NAME') ?: 'defaultdb';
+$username = getenv('DB_USER') ?: 'avnadmin';
 $password = getenv('DB_PASS') ?: '';
-$port = getenv('DB_PORT') ?: '5432';
+$port = getenv('DB_PORT') ?: '24772';
 
 try {
-    $pdo = new PDO("pgsql:host=$host;port=$port;dbname=$dbname", $username, $password);
-    $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-    $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+    $dsn = "mysql:host=$host;port=$port;dbname=$dbname;charset=utf8mb4";
+
+    $options = [
+        PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
+        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+        PDO::MYSQL_ATTR_SSL_VERIFY_SERVER_CERT => false,
+        PDO::MYSQL_ATTR_SSL_CA       => true,
+    ];
+
+    $pdo = new PDO($dsn, $username, $password, $options);
+
 } catch(PDOException $e) {
     die("Connection failed: " . $e->getMessage());
 }
@@ -16,6 +24,9 @@ try {
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
+
+// ... rest of your functions unchanged below ...
+// ... rest of your functions stay exactly the same ...
 
 function getFacultyName($pdo, $faculty_id) {
     if (!$faculty_id) return 'All Faculties';
