@@ -7,10 +7,14 @@ apiRequireMethod(['GET']);
 try {
     $user = apiFetchAuthenticatedUser($pdo, $_GET);
     $notices = apiFetchVisibleNotices($pdo, $user, [
+        'include_archived' => true,
         'q' => $_GET['q'] ?? '',
         'category' => $_GET['category'] ?? '',
         'priority' => $_GET['priority'] ?? '',
-        'limit' => $_GET['limit'] ?? 100,
+        'status' => $_GET['status'] ?? '',
+        'date_from' => $_GET['date_from'] ?? '',
+        'date_to' => $_GET['date_to'] ?? '',
+        'limit' => 100,
     ]);
 
     apiRespond(200, [
@@ -18,6 +22,6 @@ try {
         'notices' => $notices,
     ]);
 } catch (PDOException $e) {
-    apiRespond(500, ['success' => false, 'error' => 'Unable to load notices right now']);
+    apiRespond(500, ['success' => false, 'error' => 'Unable to load archive notices right now']);
 }
 ?>
