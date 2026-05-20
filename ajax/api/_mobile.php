@@ -96,6 +96,9 @@ function apiUserPayload(array $user): array
         'student_id' => $user['student_id'] ?? null,
         'membership' => $user['membership'] ?? null,
         'profile_picture' => $user['profile_picture'] ?? null,
+        'profile_picture_url' => !empty($user['profile_picture'])
+            ? '/assets/uploads/profiles/' . $user['profile_picture']
+            : '/assets/uploads/profiles/default-avatar.png',
         'token' => apiBuildToken($user),
     ];
 }
@@ -151,6 +154,252 @@ function apiCsvValues(?string $value): array
 
     $parts = array_map('trim', explode(',', $value));
     return array_values(array_filter($parts));
+}
+
+function apiUploadPath(string $relativePath = ''): string
+{
+    $base = realpath(__DIR__ . '/../../assets');
+    if ($base === false) {
+        $base = __DIR__ . '/../../assets';
+    }
+
+    return rtrim($base, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . ltrim($relativePath, DIRECTORY_SEPARATOR);
+}
+
+function apiEnsureDirectory(string $path): void
+{
+    if (!is_dir($path) && !mkdir($path, 0777, true) && !is_dir($path)) {
+        apiRespond(500, ['success' => false, 'error' => 'Could not prepare the upload directory']);
+    }
+}
+
+function apiSanitizeUploadName(string $filename, string $prefix): string
+{
+    $extension = strtolower((string) pathinfo($filename, PATHINFO_EXTENSION));
+    $stem = preg_replace('/[^a-zA-Z0-9_-]/', '-', (string) pathinfo($filename, PATHINFO_FILENAME));
+    $stem = trim((string) $stem, '-');
+    $stem = $stem !== '' ? $stem : 'file';
+
+    return $prefix . '_' . time() . '_' . $stem . ($extension !== '' ? '.' . $extension : '');
+}
+
+function apiMoveUploadedFile(string $field, string $directory, array $allowedExtensions, string $prefix): ?string
+{
+    if (!isset($_FILES[$field])) {
+        return null;
+    }
+
+    $file = $_FILES[$field];
+    $errorCode = (int) ($file['error'] ?? UPLOAD_ERR_NO_FILE);
+    if ($errorCode === UPLOAD_ERR_NO_FILE) {
+        return null;
+    }
+
+    if ($errorCode !== UPLOAD_ERR_OK) {
+        apiRespond(400, ['success' => false, 'error' => 'The uploaded file could not be processed']);
+    }
+
+    $originalName = (string) ($file['name'] ?? '');
+    $extension = strtolower((string) pathinfo($originalName, PATHINFO_EXTENSION));
+    if ($extension === '' || !in_array($extension, $allowedExtensions, true)) {
+        apiRespond(400, ['success' => false, 'error' => 'That file type is not allowed']);
+    }
+
+    $targetDir = apiUploadPath($directory);
+    apiEnsureDirectory($targetDir);
+
+    $newFilename = apiSanitizeUploadName($originalName, $prefix);
+    $targetPath = rtrim($targetDir, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $newFilename;
+
+    if (!move_uploaded_file((string) $file['tmp_name'], $targetPath)) {
+        apiRespond(500, ['success' => false, 'error' => 'The uploaded file could not be saved']);
+    }
+
+    return $newFilename;
+}
+
+function apiDeleteUploadedFile(string $relativePath): void
+{
+    $absolutePath = apiUploadPath($relativePath);
+    if (is_file($absolutePath)) {
+        @unlink($absolutePath);
+    }
+}
+
+function apiLocationFeaturesSupported(PDO $pdo): bool
+{
+    return featureTableExists($pdo, 'user_locations')
+        && featureColumnExists($pdo, 'notices', 'latitude')
+        && featureColumnExists($pdo, 'notices', 'longitude')
+        && featureColumnExists($pdo, 'notices', 'location_name')
+        && featureColumnExists($pdo, 'notices', 'radius_km')
+        && featureColumnExists($pdo, 'notices', 'event_date');
+}
+
+function apiFetchUserLocation(PDO $pdo, int $userId): ?array
+{
+    if (!featureTableExists($pdo, 'user_locations')) {
+        return null;
+    }
+
+    $columns = ['latitude', 'longitude', 'location_name', 'updated_at'];
+    if (featureColumnExists($pdo, 'user_locations', 'location_address')) {
+        $columns[] = 'location_address';
+    }
+
+    $stmt = $pdo->prepare('SELECT ' . implode(', ', $columns) . ' FROM user_locations WHERE user_id = ? LIMIT 1');
+    $stmt->execute([$userId]);
+    $location = $stmt->fetch();
+
+    return $location ?: null;
+}
+
+function apiFetchLocationEvents(PDO $pdo, array $user, int $limit = 100): array
+{
+    $events = apiFetchVisibleNotices($pdo, $user, ['limit' => $limit]);
+
+    return array_values(array_filter($events, static function (array $notice): bool {
+        return !empty($notice['latitude']) && !empty($notice['longitude']);
+    }));
+}
+
+function apiDistanceKm(float $lat1, float $lng1, float $lat2, float $lng2): float
+{
+    $earthRadius = 6371;
+    $latDelta = deg2rad($lat2 - $lat1);
+    $lngDelta = deg2rad($lng2 - $lng1);
+
+    $a = sin($latDelta / 2) ** 2
+        + cos(deg2rad($lat1)) * cos(deg2rad($lat2)) * sin($lngDelta / 2) ** 2;
+
+    $c = 2 * atan2(sqrt($a), sqrt(1 - $a));
+    return $earthRadius * $c;
+}
+
+function apiFetchNearbyLocationEvents(PDO $pdo, array $user, array $userLocation, int $limit = 50): array
+{
+    $events = apiFetchLocationEvents($pdo, $user, 200);
+    $lat = (float) $userLocation['latitude'];
+    $lng = (float) $userLocation['longitude'];
+    $nearby = [];
+
+    foreach ($events as $event) {
+        $eventLat = isset($event['latitude']) ? (float) $event['latitude'] : null;
+        $eventLng = isset($event['longitude']) ? (float) $event['longitude'] : null;
+        if ($eventLat === null || $eventLng === null) {
+            continue;
+        }
+
+        $distance = apiDistanceKm($lat, $lng, $eventLat, $eventLng);
+        $radius = isset($event['radius_km']) && $event['radius_km'] !== null
+            ? (float) $event['radius_km']
+            : 10.0;
+
+        if ($distance <= max($radius, 0.5)) {
+            $event['distance'] = round($distance, 3);
+            $nearby[] = $event;
+        }
+    }
+
+    usort($nearby, static function (array $left, array $right): int {
+        return ($left['distance'] ?? 0) <=> ($right['distance'] ?? 0);
+    });
+
+    return array_slice($nearby, 0, $limit);
+}
+
+function apiSaveUserLocation(PDO $pdo, int $userId, float $latitude, float $longitude, ?string $locationName, ?string $locationAddress): void
+{
+    $hasAddress = featureColumnExists($pdo, 'user_locations', 'location_address');
+
+    if ($hasAddress) {
+        $stmt = $pdo->prepare("
+            INSERT INTO user_locations (user_id, latitude, longitude, location_name, location_address)
+            VALUES (?, ?, ?, ?, ?)
+            ON DUPLICATE KEY UPDATE
+                latitude = VALUES(latitude),
+                longitude = VALUES(longitude),
+                location_name = VALUES(location_name),
+                location_address = VALUES(location_address),
+                updated_at = NOW()
+        ");
+        $stmt->execute([$userId, $latitude, $longitude, $locationName, $locationAddress]);
+        return;
+    }
+
+    $stmt = $pdo->prepare("
+        INSERT INTO user_locations (user_id, latitude, longitude, location_name)
+        VALUES (?, ?, ?, ?)
+        ON DUPLICATE KEY UPDATE
+            latitude = VALUES(latitude),
+            longitude = VALUES(longitude),
+            location_name = VALUES(location_name),
+            updated_at = NOW()
+    ");
+    $stmt->execute([$userId, $latitude, $longitude, $locationName]);
+}
+
+function apiNotifyNearbyUsers(PDO $pdo, int $noticeId, float $latitude, float $longitude, ?float $radiusKm, string $title): int
+{
+    if (!featureTableExists($pdo, 'user_locations')) {
+        return 0;
+    }
+
+    $effectiveRadius = $radiusKm !== null && $radiusKm > 0 ? $radiusKm : 10.0;
+    $hasAddress = featureColumnExists($pdo, 'user_locations', 'location_address');
+    $userLocationColumns = $hasAddress ? 'ul.latitude, ul.longitude, ul.location_name, ul.location_address' : 'ul.latitude, ul.longitude, ul.location_name';
+    $sql = "
+        SELECT u.id AS user_id, u.name, {$userLocationColumns}
+        FROM user_locations ul
+        JOIN users u ON u.id = ul.user_id
+        WHERE u.role = 'student' AND u.is_active = 1
+    ";
+
+    $stmt = $pdo->query($sql);
+    $targetUsers = $stmt->fetchAll();
+    $notified = 0;
+    $nearbyInsert = null;
+    $notificationInsert = null;
+
+    if (featureTableExists($pdo, 'nearby_notifications')) {
+        $nearbyInsert = $pdo->prepare("
+            INSERT INTO nearby_notifications (user_id, notice_id, distance_km)
+            VALUES (?, ?, ?)
+        ");
+    }
+
+    if (featureTableExists($pdo, 'notifications')) {
+        $notificationInsert = $pdo->prepare("
+            INSERT INTO notifications (user_id, notice_id, title, message)
+            VALUES (?, ?, ?, ?)
+        ");
+    }
+
+    foreach ($targetUsers as $targetUser) {
+        $distance = apiDistanceKm(
+            $latitude,
+            $longitude,
+            (float) $targetUser['latitude'],
+            (float) $targetUser['longitude']
+        );
+
+        if ($distance > $effectiveRadius) {
+            continue;
+        }
+
+        $notified++;
+
+        if ($nearbyInsert) {
+            $nearbyInsert->execute([(int) $targetUser['user_id'], $noticeId, round($distance, 3)]);
+        }
+
+        if ($notificationInsert && !notificationExistsForNotice($pdo, $noticeId, (int) $targetUser['user_id'])) {
+            $message = 'Event near you: "' . $title . '" is happening ' . round($distance, 1) . ' km from your saved campus location.';
+            $notificationInsert->execute([(int) $targetUser['user_id'], $noticeId, 'Nearby event alert', $message]);
+        }
+    }
+
+    return $notified;
 }
 
 function apiTimeAgo(?string $timestamp): ?string

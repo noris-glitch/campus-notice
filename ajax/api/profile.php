@@ -111,6 +111,33 @@ try {
         ]);
     }
 
+    if ($action === 'upload_profile_picture') {
+        $newFilename = apiMoveUploadedFile('profile_picture', 'uploads/profiles', ['jpg', 'jpeg', 'png', 'gif', 'webp'], 'profile');
+
+        if (!$newFilename) {
+            apiRespond(400, ['success' => false, 'error' => 'Choose an image to upload']);
+        }
+
+        $oldFilename = $user['profile_picture'] ?? null;
+        $stmt = $pdo->prepare('UPDATE users SET profile_picture = ? WHERE id = ?');
+        $stmt->execute([$newFilename, (int) $user['id']]);
+
+        if ($oldFilename && $oldFilename !== $newFilename) {
+            apiDeleteUploadedFile('uploads/profiles/' . $oldFilename);
+        }
+
+        $freshUser = apiFetchAuthenticatedUser($pdo, [
+            'user_id' => $user['id'],
+            'token' => apiBuildToken($user),
+        ]);
+
+        apiRespond(200, [
+            'success' => true,
+            'message' => 'Profile picture updated successfully',
+            'user' => apiUserPayload($freshUser),
+        ]);
+    }
+
     if ($action === 'change_password') {
         $currentPassword = (string) ($data['current_password'] ?? '');
         $newPassword = (string) ($data['new_password'] ?? '');

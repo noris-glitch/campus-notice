@@ -57,6 +57,19 @@ try {
         $deliveryChannels = normalizeDeliveryChannels($data['delivery_channels'] ?? ['in_app']);
         $submissionAction = (string) ($data['submission_action'] ?? ($userRole === 'super_admin' ? 'publish' : 'submit'));
         $templateId = apiNullableInt($data['template_id'] ?? null);
+        $latitude = isset($data['latitude']) && $data['latitude'] !== '' ? (float) $data['latitude'] : null;
+        $longitude = isset($data['longitude']) && $data['longitude'] !== '' ? (float) $data['longitude'] : null;
+        $locationName = apiNullableString($data['location_name'] ?? null);
+        $locationAddress = apiNullableString($data['location_address'] ?? null);
+        $radiusKm = isset($data['radius_km']) && $data['radius_km'] !== '' ? (float) $data['radius_km'] : null;
+        $eventDate = apiDateTimeOrNull($data['event_date'] ?? null);
+        $eventEndDate = apiDateTimeOrNull($data['event_end_date'] ?? null);
+        $hasLocationPayload = !empty($data['is_location_event'])
+            || $latitude !== null
+            || $longitude !== null
+            || $locationName !== null
+            || $eventDate !== null
+            || $eventEndDate !== null;
 
         if ($userRole === 'admin' && $adminFaculty) {
             $facultyTarget = $facultyTarget ?: $adminFaculty;
@@ -86,6 +99,14 @@ try {
             apiRespond(400, ['success' => false, 'error' => 'Acknowledgement deadline should be after the publish time']);
         }
 
+        if ($hasLocationPayload && ($latitude === null || $longitude === null)) {
+            apiRespond(400, ['success' => false, 'error' => 'Location-enabled notices need both latitude and longitude']);
+        }
+
+        if ($eventEndDate && $eventDate && strtotime($eventEndDate) < strtotime($eventDate)) {
+            apiRespond(400, ['success' => false, 'error' => 'Event end time should be after the event start time']);
+        }
+
         $status = 'draft';
         $approvalStatus = 'draft';
         $reviewedBy = null;
@@ -104,13 +125,21 @@ try {
             }
         }
 
+        $attachment = apiMoveUploadedFile(
+            'attachment',
+            'uploads',
+            ['jpg', 'jpeg', 'png', 'gif', 'pdf', 'doc', 'docx', 'webp'],
+            'notice'
+        );
+
         $stmt = $pdo->prepare("
             INSERT INTO notices (
                 title, content, category, priority, attachment, posted_by,
                 faculty_target, year_target, is_pinned, requires_acknowledgement,
                 acknowledgement_due_at, expire_at, publish_at, status, approval_status,
-                reviewed_by, reviewed_at, delivery_channels, template_id, recurrence_pattern, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+                reviewed_by, reviewed_at, delivery_channels, template_id, recurrence_pattern,
+                latitude, longitude, location_name, location_address, radius_km, event_date, event_end_date, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
         ");
 
         $stmt->execute([
@@ -118,7 +147,7 @@ try {
             $content,
             $category,
             $priority,
-            null,
+            $attachment,
             $userId,
             $facultyTarget,
             $yearTarget,
@@ -134,6 +163,13 @@ try {
             arrayToCsvValue($deliveryChannels),
             $templateId,
             $isRecurringTemplate ? ($recurrencePattern ?: null) : null,
+            $latitude,
+            $longitude,
+            $locationName,
+            $locationAddress,
+            $radiusKm,
+            $eventDate,
+            $eventEndDate,
         ]);
 
         $newNoticeId = (int) $pdo->lastInsertId();
@@ -159,6 +195,9 @@ try {
 
         if ($status === 'published') {
             $deliverySummary = deliverNoticeToAudience($pdo, $newNoticeId);
+            if ($latitude !== null && $longitude !== null) {
+                apiNotifyNearbyUsers($pdo, $newNoticeId, $latitude, $longitude, $radiusKm, $title);
+            }
         }
 
         logActivity($pdo, $userId, 'mobile_notice_created', 'Notice ID ' . $newNoticeId . ' created with status ' . $status);

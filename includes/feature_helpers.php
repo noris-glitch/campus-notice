@@ -133,6 +133,35 @@ if (!function_exists('ensureFeatureSchema')) {
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         ");
 
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS `user_locations` (
+                `user_id` INT UNSIGNED NOT NULL,
+                `latitude` DECIMAL(10,7) NOT NULL,
+                `longitude` DECIMAL(10,7) NOT NULL,
+                `location_name` VARCHAR(255) NULL,
+                `location_address` VARCHAR(255) NULL,
+                `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                PRIMARY KEY (`user_id`),
+                CONSTRAINT `fk_user_locations_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE ON UPDATE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        ");
+
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS `nearby_notifications` (
+                `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+                `user_id` INT UNSIGNED NOT NULL,
+                `notice_id` INT UNSIGNED NOT NULL,
+                `distance_km` DECIMAL(7,3) NOT NULL,
+                `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (`id`),
+                KEY `idx_nearby_notifications_user` (`user_id`),
+                KEY `idx_nearby_notifications_notice` (`notice_id`),
+                CONSTRAINT `fk_nearby_notifications_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE ON UPDATE CASCADE,
+                CONSTRAINT `fk_nearby_notifications_notice` FOREIGN KEY (`notice_id`) REFERENCES `notices` (`id`) ON DELETE CASCADE ON UPDATE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        ");
+
         $columns = [
             'priority' => "ALTER TABLE `notices` ADD COLUMN `priority` VARCHAR(20) NOT NULL DEFAULT 'normal' AFTER `category`",
             'requires_acknowledgement' => "ALTER TABLE `notices` ADD COLUMN `requires_acknowledgement` TINYINT(1) NOT NULL DEFAULT 0 AFTER `is_pinned`",
@@ -143,13 +172,24 @@ if (!function_exists('ensureFeatureSchema')) {
             'reviewed_at' => "ALTER TABLE `notices` ADD COLUMN `reviewed_at` DATETIME NULL AFTER `reviewed_by`",
             'delivery_channels' => "ALTER TABLE `notices` ADD COLUMN `delivery_channels` VARCHAR(100) NOT NULL DEFAULT 'in_app' AFTER `reviewed_at`",
             'template_id' => "ALTER TABLE `notices` ADD COLUMN `template_id` INT UNSIGNED NULL AFTER `delivery_channels`",
-            'recurrence_pattern' => "ALTER TABLE `notices` ADD COLUMN `recurrence_pattern` VARCHAR(100) NULL AFTER `template_id`"
+            'recurrence_pattern' => "ALTER TABLE `notices` ADD COLUMN `recurrence_pattern` VARCHAR(100) NULL AFTER `template_id`",
+            'latitude' => "ALTER TABLE `notices` ADD COLUMN `latitude` DECIMAL(10,7) NULL AFTER `expire_at`",
+            'longitude' => "ALTER TABLE `notices` ADD COLUMN `longitude` DECIMAL(10,7) NULL AFTER `latitude`",
+            'location_name' => "ALTER TABLE `notices` ADD COLUMN `location_name` VARCHAR(255) NULL AFTER `longitude`",
+            'location_address' => "ALTER TABLE `notices` ADD COLUMN `location_address` VARCHAR(255) NULL AFTER `location_name`",
+            'radius_km' => "ALTER TABLE `notices` ADD COLUMN `radius_km` DECIMAL(7,3) NULL AFTER `location_address`",
+            'event_date' => "ALTER TABLE `notices` ADD COLUMN `event_date` DATETIME NULL AFTER `radius_km`",
+            'event_end_date' => "ALTER TABLE `notices` ADD COLUMN `event_end_date` DATETIME NULL AFTER `event_date`"
         ];
 
         foreach ($columns as $column => $sql) {
             if (!featureColumnExists($pdo, 'notices', $column)) {
                 $pdo->exec($sql);
             }
+        }
+
+        if (!featureColumnExists($pdo, 'user_locations', 'location_address')) {
+            $pdo->exec("ALTER TABLE `user_locations` ADD COLUMN `location_address` VARCHAR(255) NULL AFTER `location_name`");
         }
     }
 }
@@ -763,4 +803,3 @@ if (!function_exists('saveNoticeReviewDecision')) {
         return null;
     }
 }
-
