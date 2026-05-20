@@ -35,6 +35,7 @@ try {
                 apiFetchFaculties($pdo),
                 static fn(array $faculty): bool => ($faculty['name'] ?? '') !== 'Dean of Students'
             )),
+            'departments' => apiFetchDepartments($pdo),
             'years' => [
                 ['value' => 1, 'label' => '1st Year'],
                 ['value' => 2, 'label' => '2nd Year'],
@@ -52,7 +53,10 @@ try {
     $confirmPassword = (string) ($data['confirm_password'] ?? '');
     $year = apiNullableInt($data['year'] ?? null);
     $facultyId = apiNullableInt($data['faculty_id'] ?? null);
+    $phoneNumber = normalizePhoneNumber($data['phone_number'] ?? null);
     $membership = apiNullableString($data['membership'] ?? null);
+    $departmentInput = apiNullableString($data['department_name'] ?? ($data['department_id'] ?? null));
+    $departmentId = null;
 
     $errors = [];
 
@@ -76,8 +80,23 @@ try {
     if ($facultyId === null && count(apiFetchFaculties($pdo)) > 0) {
         $errors[] = 'Please select a faculty';
     }
+    if (($data['phone_number'] ?? '') !== '' && $phoneNumber === null) {
+        $errors[] = 'Please enter a valid phone number';
+    }
 
     $errors = array_merge($errors, apiPasswordStrengthErrors($password));
+
+    if ($departmentInput !== null) {
+        $departmentId = resolveDepartmentId($pdo, $departmentInput, $facultyId, true);
+        if (!$departmentId) {
+            $errors[] = 'Please choose a valid department';
+        } else {
+            $department = fetchDepartmentById($pdo, $departmentId);
+            if ($department && $facultyId !== null && !empty($department['faculty_id']) && (int) $department['faculty_id'] !== $facultyId) {
+                $errors[] = 'That department does not belong to the selected faculty';
+            }
+        }
+    }
 
     $stmt = $pdo->prepare('SELECT COUNT(*) FROM users WHERE email = ?');
     $stmt->execute([$email]);
@@ -116,6 +135,18 @@ try {
         $fields[] = 'faculty_id';
         $placeholders[] = '?';
         $params[] = $facultyId;
+    }
+
+    if ($departmentId !== null && columnExists($pdo, 'users', 'department_id')) {
+        $fields[] = 'department_id';
+        $placeholders[] = '?';
+        $params[] = $departmentId;
+    }
+
+    if ($phoneNumber !== null && columnExists($pdo, 'users', 'phone_number')) {
+        $fields[] = 'phone_number';
+        $placeholders[] = '?';
+        $params[] = $phoneNumber;
     }
 
     if ($membership !== null && columnExists($pdo, 'users', 'membership')) {

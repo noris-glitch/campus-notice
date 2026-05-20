@@ -30,10 +30,12 @@ try {
             'success' => true,
             'user' => apiUserPayload($user),
             'faculties' => apiFetchFaculties($pdo),
+            'departments' => apiFetchDepartments($pdo),
             'categories' => getAvailableNoticeCategories(),
             'notification_preferences' => [
                 'in_app_enabled' => apiBool($prefs['in_app_enabled'] ?? 1),
                 'email_enabled' => apiBool($prefs['email_enabled'] ?? 0),
+                'sms_enabled' => apiBool($prefs['sms_enabled'] ?? 0),
                 'emergency_override' => apiBool($prefs['emergency_override'] ?? 1),
                 'quiet_hours_start' => $prefs['quiet_hours_start'] ?? null,
                 'quiet_hours_end' => $prefs['quiet_hours_end'] ?? null,
@@ -56,7 +58,11 @@ try {
         $email = trim((string) ($data['email'] ?? ''));
         $year = apiNullableInt($data['year'] ?? null);
         $facultyId = apiNullableInt($data['faculty_id'] ?? null);
+        $phoneNumberRaw = trim((string) ($data['phone_number'] ?? ''));
+        $phoneNumber = normalizePhoneNumber($phoneNumberRaw !== '' ? $phoneNumberRaw : null);
         $membership = apiNullableString($data['membership'] ?? null);
+        $departmentInput = apiNullableString($data['department_name'] ?? ($data['department_id'] ?? null));
+        $departmentId = null;
 
         if ($name === '' || $email === '') {
             apiRespond(400, ['success' => false, 'error' => 'Name and email are required']);
@@ -66,18 +72,43 @@ try {
             apiRespond(400, ['success' => false, 'error' => 'Please enter a valid email address']);
         }
 
+        if ($phoneNumberRaw !== '' && $phoneNumber === null) {
+            apiRespond(400, ['success' => false, 'error' => 'Please enter a valid phone number']);
+        }
+
         $checkStmt = $pdo->prepare('SELECT COUNT(*) FROM users WHERE email = ? AND id != ?');
         $checkStmt->execute([$email, (int) $user['id']]);
         if ((int) $checkStmt->fetchColumn() > 0) {
             apiRespond(400, ['success' => false, 'error' => 'Email already used by another account']);
         }
 
+        if ($departmentInput !== null) {
+            $departmentId = resolveDepartmentId($pdo, $departmentInput, $facultyId, true);
+            if (!$departmentId) {
+                apiRespond(400, ['success' => false, 'error' => 'Please choose a valid department']);
+            }
+
+            $department = fetchDepartmentById($pdo, $departmentId);
+            if ($department && $facultyId !== null && !empty($department['faculty_id']) && (int) $department['faculty_id'] !== $facultyId) {
+                apiRespond(400, ['success' => false, 'error' => 'That department does not belong to the selected faculty']);
+            }
+        }
+
         $stmt = $pdo->prepare("
             UPDATE users
-            SET name = ?, email = ?, faculty_id = ?, year = ?, membership = ?
+            SET name = ?, email = ?, faculty_id = ?, department_id = ?, phone_number = ?, year = ?, membership = ?
             WHERE id = ?
         ");
-        $stmt->execute([$name, $email, $facultyId, $year, $membership, (int) $user['id']]);
+        $stmt->execute([
+            $name,
+            $email,
+            $facultyId,
+            $departmentId,
+            $phoneNumber,
+            $year,
+            $membership,
+            (int) $user['id'],
+        ]);
 
         $freshUser = apiFetchAuthenticatedUser($pdo, [
             'user_id' => $user['id'],
@@ -99,6 +130,7 @@ try {
         saveUserNotificationPreferences($pdo, (int) $user['id'], [
             'in_app_enabled' => !empty($data['in_app_enabled']),
             'email_enabled' => !empty($data['email_enabled']),
+            'sms_enabled' => !empty($data['sms_enabled']),
             'emergency_override' => !empty($data['emergency_override']),
             'quiet_hours_start' => $data['quiet_hours_start'] ?? null,
             'quiet_hours_end' => $data['quiet_hours_end'] ?? null,

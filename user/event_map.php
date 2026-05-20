@@ -9,8 +9,17 @@ if(!isset($_SESSION['user_id'])) {
 
 $user_id = $_SESSION['user_id'];
 $user_faculty = $_SESSION['faculty_id'] ?? null;
+$user_department = $_SESSION['department_id'] ?? null;
 $user_year = $_SESSION['year'] ?? null;
+$user_role = $_SESSION['user_role'] ?? 'student';
 $events = [];
+$viewerProfile = [
+    'role' => $user_role,
+    'faculty_id' => $user_faculty,
+    'department_id' => $user_department,
+    'year' => $user_year,
+    'admin_type' => $_SESSION['admin_type'] ?? null,
+];
 
 // Check if location columns exist
 try {
@@ -23,17 +32,21 @@ try {
 // Get events with locations if columns exist
 if($hasLocationColumns) {
     try {
+        [$audienceConditions, $audienceParams] = buildNoticeAudienceConditions($pdo, 'n', $viewerProfile);
         $sql = "SELECT n.*, u.name as author_name 
                 FROM notices n 
                 JOIN users u ON n.posted_by = u.id 
                 WHERE n.latitude IS NOT NULL 
                 AND n.longitude IS NOT NULL
                 AND n.status = 'published'
+                AND (n.publish_at IS NULL OR n.publish_at <= NOW())
+                AND (n.expire_at IS NULL OR n.expire_at > NOW())
+                AND " . implode(' AND ', $audienceConditions) . "
                 ORDER BY n.event_date ASC, n.created_at DESC
                 LIMIT 50";
         
         $stmt = $pdo->prepare($sql);
-        $stmt->execute();
+        $stmt->execute($audienceParams);
         $events = $stmt->fetchAll();
     } catch (PDOException $e) {
         $events = [];

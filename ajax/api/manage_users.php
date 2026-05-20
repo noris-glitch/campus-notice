@@ -32,9 +32,11 @@ function apiFetchManagedUsers(PDO $pdo, int $currentUserId): array
     $stmt = $pdo->prepare("
         SELECT
             u.*,
-            f.name AS faculty_name
+            f.name AS faculty_name,
+            d.name AS department_name
         FROM users u
         LEFT JOIN faculties f ON u.faculty_id = f.id
+        LEFT JOIN departments d ON u.department_id = d.id
         WHERE u.id != ?
         ORDER BY FIELD(u.role, 'super_admin', 'admin', 'student'), u.name
     ");
@@ -69,6 +71,7 @@ try {
             'success' => true,
             'admin_types' => apiManageUserAdminTypes(),
             'faculties' => apiFetchFaculties($pdo),
+            'departments' => apiFetchDepartments($pdo),
             'stats' => apiFetchManagedUserStats($pdo, (int) $user['id']),
             'users' => apiFetchManagedUsers($pdo, (int) $user['id']),
             'years' => apiAdminYears(),
@@ -89,8 +92,12 @@ try {
         $role = trim((string) ($data['role'] ?? 'student'));
         $adminType = trim((string) ($data['admin_type'] ?? ''));
         $facultyId = apiNullableInt($data['faculty_id'] ?? null);
+        $phoneNumberRaw = trim((string) ($data['phone_number'] ?? ''));
+        $phoneNumber = normalizePhoneNumber($phoneNumberRaw !== '' ? $phoneNumberRaw : null);
         $year = apiNullableInt($data['year'] ?? null);
         $membership = apiNullableString($data['membership'] ?? null);
+        $departmentInput = apiNullableString($data['department_name'] ?? ($data['department_id'] ?? null));
+        $departmentId = null;
 
         if ($name === '' || $email === '' || $studentId === '' || $password === '') {
             apiRespond(400, ['success' => false, 'error' => 'Name, email, student or staff ID, and password are required']);
@@ -98,6 +105,14 @@ try {
 
         if (strlen($password) < 6) {
             apiRespond(400, ['success' => false, 'error' => 'Password must be at least 6 characters']);
+        }
+
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            apiRespond(400, ['success' => false, 'error' => 'Choose a valid email address']);
+        }
+
+        if ($phoneNumberRaw !== '' && $phoneNumber === null) {
+            apiRespond(400, ['success' => false, 'error' => 'Choose a valid phone number']);
         }
 
         if (!in_array($role, apiManageUserRoles(), true)) {
@@ -122,11 +137,23 @@ try {
             apiRespond(400, ['success' => false, 'error' => 'Student or staff ID already exists']);
         }
 
+        if ($departmentInput !== null) {
+            $departmentId = resolveDepartmentId($pdo, $departmentInput, $facultyId, true);
+            if (!$departmentId) {
+                apiRespond(400, ['success' => false, 'error' => 'Choose a valid department']);
+            }
+
+            $department = fetchDepartmentById($pdo, $departmentId);
+            if ($department && $facultyId !== null && !empty($department['faculty_id']) && (int) $department['faculty_id'] !== $facultyId) {
+                apiRespond(400, ['success' => false, 'error' => 'That department does not belong to the selected faculty']);
+            }
+        }
+
         $insert = $pdo->prepare("
             INSERT INTO users (
                 name, email, student_id, password, role, admin_type,
-                faculty_id, year, membership, is_approved, is_active
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1)
+                faculty_id, department_id, phone_number, year, membership, is_approved, is_active
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1)
         ");
         $insert->execute([
             $name,
@@ -136,6 +163,8 @@ try {
             $role,
             $adminType !== '' ? $adminType : null,
             $facultyId,
+            $departmentId,
+            $phoneNumber,
             $year,
             $membership,
         ]);
@@ -155,12 +184,24 @@ try {
         $role = trim((string) ($data['role'] ?? 'student'));
         $adminType = trim((string) ($data['admin_type'] ?? ''));
         $facultyId = apiNullableInt($data['faculty_id'] ?? null);
+        $phoneNumberRaw = trim((string) ($data['phone_number'] ?? ''));
+        $phoneNumber = normalizePhoneNumber($phoneNumberRaw !== '' ? $phoneNumberRaw : null);
         $year = apiNullableInt($data['year'] ?? null);
         $membership = apiNullableString($data['membership'] ?? null);
+        $departmentInput = apiNullableString($data['department_name'] ?? ($data['department_id'] ?? null));
+        $departmentId = null;
         $isActive = !empty($data['is_active']) ? 1 : 0;
 
         if ($managedUserId <= 0 || $name === '' || $email === '') {
             apiRespond(400, ['success' => false, 'error' => 'User, name, and email are required']);
+        }
+
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            apiRespond(400, ['success' => false, 'error' => 'Choose a valid email address']);
+        }
+
+        if ($phoneNumberRaw !== '' && $phoneNumber === null) {
+            apiRespond(400, ['success' => false, 'error' => 'Choose a valid phone number']);
         }
 
         if (!in_array($role, apiManageUserRoles(), true)) {
@@ -191,9 +232,21 @@ try {
             apiRespond(400, ['success' => false, 'error' => 'Email already exists']);
         }
 
+        if ($departmentInput !== null) {
+            $departmentId = resolveDepartmentId($pdo, $departmentInput, $facultyId, true);
+            if (!$departmentId) {
+                apiRespond(400, ['success' => false, 'error' => 'Choose a valid department']);
+            }
+
+            $department = fetchDepartmentById($pdo, $departmentId);
+            if ($department && $facultyId !== null && !empty($department['faculty_id']) && (int) $department['faculty_id'] !== $facultyId) {
+                apiRespond(400, ['success' => false, 'error' => 'That department does not belong to the selected faculty']);
+            }
+        }
+
         $update = $pdo->prepare("
             UPDATE users
-            SET name = ?, email = ?, role = ?, admin_type = ?, faculty_id = ?, year = ?, membership = ?, is_active = ?
+            SET name = ?, email = ?, role = ?, admin_type = ?, faculty_id = ?, department_id = ?, phone_number = ?, year = ?, membership = ?, is_active = ?
             WHERE id = ?
         ");
         $update->execute([
@@ -202,6 +255,8 @@ try {
             $role,
             $adminType !== '' ? $adminType : null,
             $facultyId,
+            $departmentId,
+            $phoneNumber,
             $year,
             $membership,
             $isActive,

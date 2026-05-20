@@ -7,9 +7,20 @@ if(!isset($_SESSION['user_id'])) {
 }
 
 $user_id = $_SESSION['user_id'];
+$user_faculty = $_SESSION['faculty_id'] ?? null;
+$user_department = $_SESSION['department_id'] ?? null;
+$user_year = $_SESSION['year'] ?? null;
+$user_role = $_SESSION['user_role'] ?? 'student';
 $nearby_events = [];
 $user_location = null;
 $table_exists = false;
+$viewerProfile = [
+    'role' => $user_role,
+    'faculty_id' => $user_faculty,
+    'department_id' => $user_department,
+    'year' => $user_year,
+    'admin_type' => $_SESSION['admin_type'] ?? null,
+];
 
 // Check if user_locations table exists
 try {
@@ -29,6 +40,7 @@ try {
 // Get nearby events if user has location
 if($user_location && $table_exists) {
     try {
+        [$audienceConditions, $audienceParams] = buildNoticeAudienceConditions($pdo, 'n', $viewerProfile);
         // Calculate nearby events using SQL
         $sql = "SELECT n.*, u.name as author_name,
                 (6371 * acos(cos(radians(?)) * cos(radians(n.latitude)) 
@@ -39,12 +51,19 @@ if($user_location && $table_exists) {
                 WHERE n.latitude IS NOT NULL 
                 AND n.longitude IS NOT NULL
                 AND n.status = 'published'
+                AND (n.publish_at IS NULL OR n.publish_at <= NOW())
+                AND (n.expire_at IS NULL OR n.expire_at > NOW())
+                AND " . implode(' AND ', $audienceConditions) . "
                 HAVING distance <= 10
                 ORDER BY distance ASC
                 LIMIT 20";
         
         $stmt = $pdo->prepare($sql);
-        $stmt->execute([$user_location['latitude'], $user_location['longitude'], $user_location['latitude']]);
+        $stmt->execute(array_merge([
+            $user_location['latitude'],
+            $user_location['longitude'],
+            $user_location['latitude'],
+        ], $audienceParams));
         $nearby_events = $stmt->fetchAll();
     } catch (PDOException $e) {
         $nearby_events = [];

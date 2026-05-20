@@ -15,7 +15,7 @@ function apiRequireStudentSyncRole(array $user): void
 function apiStudentSyncMeta(): array
 {
     return [
-        'sample_columns' => ['student_id', 'email', 'name', 'faculty', 'faculty_id', 'year', 'membership'],
+        'sample_columns' => ['student_id', 'email', 'name', 'faculty', 'faculty_id', 'department', 'department_id', 'phone_number', 'year', 'membership'],
         'note' => 'This sync updates existing student accounts by student_id or email. Unmatched rows are skipped.',
     ];
 }
@@ -80,6 +80,8 @@ try {
         $year = isset($record['year']) && $record['year'] !== '' ? (int) $record['year'] : null;
         $membership = $record['membership'] ?? null;
         $facultyRaw = $record['faculty'] ?? ($record['faculty_id'] ?? '');
+        $departmentRaw = $record['department'] ?? ($record['department_id'] ?? '');
+        $phoneRaw = $record['phone_number'] ?? '';
 
         if ($studentId === '' && $email === '') {
             $results['skipped']++;
@@ -121,15 +123,44 @@ try {
             continue;
         }
 
+        $departmentId = null;
+        if ($departmentRaw !== '') {
+            $departmentId = resolveDepartmentId($pdo, $departmentRaw, $facultyId, true);
+            if (!$departmentId) {
+                $results['skipped']++;
+                $results['issues'][] = 'Unknown department "' . $departmentRaw . '" for ' . ($studentId ?: $email) . '.';
+                continue;
+            }
+
+            $department = fetchDepartmentById($pdo, $departmentId);
+            if ($department && $facultyId !== null && !empty($department['faculty_id']) && (int) $department['faculty_id'] !== (int) $facultyId) {
+                $results['skipped']++;
+                $results['issues'][] = 'Department "' . $departmentRaw . '" does not belong to the resolved faculty for ' . ($studentId ?: $email) . '.';
+                continue;
+            }
+        }
+
+        $phoneNumber = null;
+        if ($phoneRaw !== '') {
+            $phoneNumber = normalizePhoneNumber($phoneRaw);
+            if ($phoneNumber === null) {
+                $results['skipped']++;
+                $results['issues'][] = 'Invalid phone number "' . $phoneRaw . '" for ' . ($studentId ?: $email) . '.';
+                continue;
+            }
+        }
+
         $updateStmt = $pdo->prepare("
             UPDATE users
-            SET name = ?, email = ?, faculty_id = ?, year = ?, membership = ?
+            SET name = ?, email = ?, faculty_id = ?, department_id = ?, phone_number = ?, year = ?, membership = ?
             WHERE id = ?
         ");
         $updateStmt->execute([
             $name !== '' ? $name : $existing['name'],
             $email !== '' ? $email : $existing['email'],
             $facultyId ?: ($existing['faculty_id'] ?? null),
+            $departmentId ?: ($existing['department_id'] ?? null),
+            $phoneNumber ?: ($existing['phone_number'] ?? null),
             $year ?: ($existing['year'] ?? null),
             $membership !== null && $membership !== '' ? $membership : ($existing['membership'] ?? null),
             (int) $existing['id'],

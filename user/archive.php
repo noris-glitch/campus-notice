@@ -13,8 +13,14 @@ if ($_SESSION['user_role'] !== 'student') {
 
 $userId = (int) $_SESSION['user_id'];
 $userFaculty = $_SESSION['faculty_id'] ?? null;
+$userDepartment = $_SESSION['department_id'] ?? null;
 $userYear = $_SESSION['year'] ?? null;
-$targetColumn = getNoticeTargetColumn($pdo) ?: 'faculty_target';
+$viewerProfile = [
+    'role' => 'student',
+    'faculty_id' => $userFaculty,
+    'department_id' => $userDepartment,
+    'year' => $userYear,
+];
 
 $keyword = trim($_GET['q'] ?? '');
 $category = trim($_GET['category'] ?? '');
@@ -26,10 +32,11 @@ $dateTo = trim($_GET['date_to'] ?? '');
 $conditions = [
     "n.status IN ('published', 'archived')",
     "(n.publish_at IS NULL OR n.publish_at <= NOW())",
-    "(n.$targetColumn IS NULL OR n.$targetColumn = 0 OR n.$targetColumn = ?)",
-    "(n.year_target IS NULL OR n.year_target = 0 OR n.year_target = ?)",
 ];
-$params = [$userFaculty, $userYear];
+$params = [];
+[$audienceConditions, $audienceParams] = buildNoticeAudienceConditions($pdo, 'n', $viewerProfile);
+$conditions = array_merge($conditions, $audienceConditions);
+$params = array_merge($params, $audienceParams);
 
 if ($keyword !== '') {
     $conditions[] = '(n.title LIKE ? OR n.content LIKE ? OR u.name LIKE ?)';

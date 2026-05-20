@@ -17,9 +17,11 @@ try {
     $stmt = $pdo->prepare("
         SELECT
             u.*,
-            f.name AS faculty_name
+            f.name AS faculty_name,
+            d.name AS department_name
         FROM users u
         LEFT JOIN faculties f ON u.faculty_id = f.id
+        LEFT JOIN departments d ON u.department_id = d.id
         WHERE u.email = ? AND u.is_active = 1
         LIMIT 1
     ");

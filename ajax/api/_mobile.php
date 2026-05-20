@@ -58,9 +58,11 @@ function apiFetchAuthenticatedUser(PDO $pdo, array $source): array
     $stmt = $pdo->prepare("
         SELECT
             u.*,
-            f.name AS faculty_name
+            f.name AS faculty_name,
+            d.name AS department_name
         FROM users u
         LEFT JOIN faculties f ON u.faculty_id = f.id
+        LEFT JOIN departments d ON u.department_id = d.id
         WHERE u.id = ?
         LIMIT 1
     ");
@@ -92,9 +94,12 @@ function apiUserPayload(array $user): array
         'admin_type' => $user['admin_type'] ?? null,
         'faculty_id' => isset($user['faculty_id']) ? (int) $user['faculty_id'] : null,
         'faculty_name' => $user['faculty_name'] ?? null,
+        'department_id' => isset($user['department_id']) ? (int) $user['department_id'] : null,
+        'department_name' => $user['department_name'] ?? null,
         'year' => isset($user['year']) ? (int) $user['year'] : null,
         'student_id' => $user['student_id'] ?? null,
         'membership' => $user['membership'] ?? null,
+        'phone_number' => $user['phone_number'] ?? null,
         'profile_picture' => $user['profile_picture'] ?? null,
         'profile_picture_url' => !empty($user['profile_picture'])
             ? '/assets/uploads/profiles/' . $user['profile_picture']
@@ -457,9 +462,17 @@ function apiFetchFaculties(PDO $pdo): array
     }
 }
 
+function apiFetchDepartments(PDO $pdo, ?int $facultyId = null): array
+{
+    try {
+        return fetchDepartments($pdo, $facultyId);
+    } catch (PDOException $e) {
+        return [];
+    }
+}
+
 function apiNoticeBaseConditions(PDO $pdo, array $user, bool $includeArchived = false, string $alias = 'n'): array
 {
-    $targetColumn = getNoticeTargetColumn($pdo) ?: 'faculty_target';
     $conditions = [];
     $params = [];
 
@@ -471,13 +484,9 @@ function apiNoticeBaseConditions(PDO $pdo, array $user, bool $includeArchived = 
     }
 
     $conditions[] = "($alias.publish_at IS NULL OR $alias.publish_at <= NOW())";
-
-    if (($user['role'] ?? '') === 'student') {
-        $conditions[] = "($alias.$targetColumn IS NULL OR $alias.$targetColumn = 0 OR $alias.$targetColumn = ?)";
-        $conditions[] = "($alias.year_target IS NULL OR $alias.year_target = 0 OR $alias.year_target = ?)";
-        $params[] = apiNullableInt($user['faculty_id']);
-        $params[] = apiNullableInt($user['year']);
-    }
+    [$audienceConditions, $audienceParams] = buildNoticeAudienceConditions($pdo, $alias, $user);
+    $conditions = array_merge($conditions, $audienceConditions);
+    $params = array_merge($params, $audienceParams);
 
     return [$conditions, $params];
 }
@@ -800,19 +809,26 @@ function apiFetchAdminDashboard(PDO $pdo, array $user): array
 
 function apiFetchAdminNotices(PDO $pdo, array $user): array
 {
+    $targetColumn = getNoticeTargetColumn($pdo) ?: 'faculty_target';
     $query = "
         SELECT
             n.*,
             u.name AS author_name,
+            f.name AS target_faculty_name,
+            d.name AS department_name,
             (SELECT COUNT(*) FROM notice_views nv WHERE nv.notice_id = n.id) AS view_count,
             (SELECT COUNT(*) FROM bookmarks b WHERE b.notice_id = n.id) AS bookmark_count,
             (SELECT COUNT(*) FROM notice_acknowledgements na WHERE na.notice_id = n.id) AS ack_total,
             (SELECT COUNT(*) FROM notice_acknowledgements na WHERE na.notice_id = n.id AND na.status = 'acknowledged') AS ack_done,
             (SELECT COUNT(*) FROM notice_questions nq WHERE nq.notice_id = n.id AND nq.status = 'open') AS open_questions,
             (SELECT COUNT(*) FROM notice_deliveries nd WHERE nd.notice_id = n.id AND nd.channel = 'email' AND nd.status = 'sent') AS email_sent,
-            (SELECT COUNT(*) FROM notice_deliveries nd WHERE nd.notice_id = n.id AND nd.channel = 'email' AND nd.status = 'failed') AS email_failed
+            (SELECT COUNT(*) FROM notice_deliveries nd WHERE nd.notice_id = n.id AND nd.channel = 'email' AND nd.status = 'failed') AS email_failed,
+            (SELECT COUNT(*) FROM notice_deliveries nd WHERE nd.notice_id = n.id AND nd.channel = 'sms' AND nd.status = 'sent') AS sms_sent,
+            (SELECT COUNT(*) FROM notice_deliveries nd WHERE nd.notice_id = n.id AND nd.channel = 'sms' AND nd.status = 'failed') AS sms_failed
         FROM notices n
         JOIN users u ON n.posted_by = u.id
+        LEFT JOIN faculties f ON n.$targetColumn = f.id
+        LEFT JOIN departments d ON n.department_id = d.id
     ";
 
     if (($user['role'] ?? '') === 'super_admin') {

@@ -42,6 +42,7 @@ if (!function_exists('ensureFeatureSchema')) {
                 `user_id` INT UNSIGNED NOT NULL,
                 `in_app_enabled` TINYINT(1) NOT NULL DEFAULT 1,
                 `email_enabled` TINYINT(1) NOT NULL DEFAULT 0,
+                `sms_enabled` TINYINT(1) NOT NULL DEFAULT 0,
                 `emergency_override` TINYINT(1) NOT NULL DEFAULT 1,
                 `quiet_hours_start` TIME NULL,
                 `quiet_hours_end` TIME NULL,
@@ -97,7 +98,9 @@ if (!function_exists('ensureFeatureSchema')) {
                 `content` LONGTEXT NOT NULL,
                 `category` VARCHAR(80) NULL,
                 `faculty_target` INT UNSIGNED NULL,
+                `department_id` INT UNSIGNED NULL,
                 `year_target` TINYINT UNSIGNED NULL,
+                `audience_roles_csv` VARCHAR(100) NULL,
                 `is_pinned` TINYINT(1) NOT NULL DEFAULT 0,
                 `default_priority` VARCHAR(20) NOT NULL DEFAULT 'normal',
                 `requires_acknowledgement` TINYINT(1) NOT NULL DEFAULT 0,
@@ -110,6 +113,20 @@ if (!function_exists('ensureFeatureSchema')) {
                 PRIMARY KEY (`id`),
                 KEY `idx_notice_templates_created_by` (`created_by`),
                 CONSTRAINT `fk_notice_templates_created_by` FOREIGN KEY (`created_by`) REFERENCES `users` (`id`) ON DELETE CASCADE ON UPDATE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        ");
+
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS `departments` (
+                `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+                `faculty_id` INT UNSIGNED NULL,
+                `name` VARCHAR(150) NOT NULL,
+                `code` VARCHAR(40) NULL,
+                `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                PRIMARY KEY (`id`),
+                UNIQUE KEY `ux_departments_faculty_name` (`faculty_id`, `name`),
+                KEY `idx_departments_faculty` (`faculty_id`)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         ");
 
@@ -173,13 +190,15 @@ if (!function_exists('ensureFeatureSchema')) {
             'delivery_channels' => "ALTER TABLE `notices` ADD COLUMN `delivery_channels` VARCHAR(100) NOT NULL DEFAULT 'in_app' AFTER `reviewed_at`",
             'template_id' => "ALTER TABLE `notices` ADD COLUMN `template_id` INT UNSIGNED NULL AFTER `delivery_channels`",
             'recurrence_pattern' => "ALTER TABLE `notices` ADD COLUMN `recurrence_pattern` VARCHAR(100) NULL AFTER `template_id`",
+            'department_id' => "ALTER TABLE `notices` ADD COLUMN `department_id` INT UNSIGNED NULL AFTER `faculty_target`",
             'latitude' => "ALTER TABLE `notices` ADD COLUMN `latitude` DECIMAL(10,7) NULL AFTER `expire_at`",
             'longitude' => "ALTER TABLE `notices` ADD COLUMN `longitude` DECIMAL(10,7) NULL AFTER `latitude`",
             'location_name' => "ALTER TABLE `notices` ADD COLUMN `location_name` VARCHAR(255) NULL AFTER `longitude`",
             'location_address' => "ALTER TABLE `notices` ADD COLUMN `location_address` VARCHAR(255) NULL AFTER `location_name`",
             'radius_km' => "ALTER TABLE `notices` ADD COLUMN `radius_km` DECIMAL(7,3) NULL AFTER `location_address`",
             'event_date' => "ALTER TABLE `notices` ADD COLUMN `event_date` DATETIME NULL AFTER `radius_km`",
-            'event_end_date' => "ALTER TABLE `notices` ADD COLUMN `event_end_date` DATETIME NULL AFTER `event_date`"
+            'event_end_date' => "ALTER TABLE `notices` ADD COLUMN `event_end_date` DATETIME NULL AFTER `event_date`",
+            'audience_roles_csv' => "ALTER TABLE `notices` ADD COLUMN `audience_roles_csv` VARCHAR(100) NULL AFTER `year_target`"
         ];
 
         foreach ($columns as $column => $sql) {
@@ -190,6 +209,32 @@ if (!function_exists('ensureFeatureSchema')) {
 
         if (!featureColumnExists($pdo, 'user_locations', 'location_address')) {
             $pdo->exec("ALTER TABLE `user_locations` ADD COLUMN `location_address` VARCHAR(255) NULL AFTER `location_name`");
+        }
+
+        $userColumns = [
+            'phone_number' => "ALTER TABLE `users` ADD COLUMN `phone_number` VARCHAR(30) NULL AFTER `email`",
+            'department_id' => "ALTER TABLE `users` ADD COLUMN `department_id` INT UNSIGNED NULL AFTER `faculty_id`",
+        ];
+
+        foreach ($userColumns as $column => $sql) {
+            if (!featureColumnExists($pdo, 'users', $column)) {
+                $pdo->exec($sql);
+            }
+        }
+
+        if (!featureColumnExists($pdo, 'user_notification_preferences', 'sms_enabled')) {
+            $pdo->exec("ALTER TABLE `user_notification_preferences` ADD COLUMN `sms_enabled` TINYINT(1) NOT NULL DEFAULT 0 AFTER `email_enabled`");
+        }
+
+        $templateColumns = [
+            'department_id' => "ALTER TABLE `notice_templates` ADD COLUMN `department_id` INT UNSIGNED NULL AFTER `faculty_target`",
+            'audience_roles_csv' => "ALTER TABLE `notice_templates` ADD COLUMN `audience_roles_csv` VARCHAR(100) NULL AFTER `year_target`",
+        ];
+
+        foreach ($templateColumns as $column => $sql) {
+            if (!featureColumnExists($pdo, 'notice_templates', $column)) {
+                $pdo->exec($sql);
+            }
         }
     }
 }
@@ -207,7 +252,7 @@ if (!function_exists('normalizeDeliveryChannels')) {
         $channels = is_array($rawChannels) ? $rawChannels : explode(',', (string) $rawChannels);
         $channels = array_map('trim', $channels);
         $channels = array_values(array_unique(array_filter($channels)));
-        $allowed = ['in_app', 'email'];
+        $allowed = ['in_app', 'email', 'sms'];
 
         $filtered = array_values(array_intersect($channels, $allowed));
         if (empty($filtered)) {
@@ -238,6 +283,210 @@ if (!function_exists('arrayToCsvValue')) {
     }
 }
 
+if (!function_exists('featureNullableInt')) {
+    function featureNullableInt($value): ?int
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+
+        return (int) $value;
+    }
+}
+
+if (!function_exists('getNoticeAudienceRoleOptions')) {
+    function getNoticeAudienceRoleOptions(): array
+    {
+        return [
+            'student' => 'Students',
+            'admin' => 'Administrators',
+            'super_admin' => 'Super Administrators',
+        ];
+    }
+}
+
+if (!function_exists('normalizeAudienceRoles')) {
+    function normalizeAudienceRoles($rawRoles): array
+    {
+        $roles = is_array($rawRoles) ? $rawRoles : explode(',', (string) $rawRoles);
+        $roles = array_map('trim', $roles);
+        $roles = array_values(array_unique(array_filter($roles)));
+        $allowed = array_keys(getNoticeAudienceRoleOptions());
+
+        return array_values(array_intersect($roles, $allowed));
+    }
+}
+
+if (!function_exists('fetchDepartments')) {
+    function fetchDepartments(PDO $pdo, ?int $facultyId = null): array
+    {
+        if (!featureTableExists($pdo, 'departments')) {
+            return [];
+        }
+
+        $sql = "
+            SELECT
+                d.id,
+                d.faculty_id,
+                d.name,
+                d.code,
+                f.name AS faculty_name
+            FROM departments d
+            LEFT JOIN faculties f ON d.faculty_id = f.id
+        ";
+        $params = [];
+
+        if ($facultyId !== null) {
+            $sql .= " WHERE d.faculty_id = ?";
+            $params[] = $facultyId;
+        }
+
+        $sql .= " ORDER BY COALESCE(f.name, ''), d.name";
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute($params);
+        return $stmt->fetchAll();
+    }
+}
+
+if (!function_exists('fetchDepartmentById')) {
+    function fetchDepartmentById(PDO $pdo, int $departmentId): ?array
+    {
+        if ($departmentId <= 0 || !featureTableExists($pdo, 'departments')) {
+            return null;
+        }
+
+        $stmt = $pdo->prepare("
+            SELECT
+                d.id,
+                d.faculty_id,
+                d.name,
+                d.code,
+                f.name AS faculty_name
+            FROM departments d
+            LEFT JOIN faculties f ON d.faculty_id = f.id
+            WHERE d.id = ?
+            LIMIT 1
+        ");
+        $stmt->execute([$departmentId]);
+        $department = $stmt->fetch();
+
+        return $department ?: null;
+    }
+}
+
+if (!function_exists('resolveDepartmentId')) {
+    function resolveDepartmentId(PDO $pdo, ?string $rawValue, ?int $facultyId = null, bool $createIfMissing = false): ?int
+    {
+        $value = trim((string) $rawValue);
+        if ($value === '' || !featureTableExists($pdo, 'departments')) {
+            return null;
+        }
+
+        if (ctype_digit($value)) {
+            $existing = fetchDepartmentById($pdo, (int) $value);
+            return $existing ? (int) $existing['id'] : null;
+        }
+
+        $sql = "
+            SELECT id
+            FROM departments
+            WHERE LOWER(name) = LOWER(?)
+        ";
+        $params = [$value];
+
+        if ($facultyId !== null) {
+            $sql .= " AND (faculty_id = ? OR faculty_id IS NULL)";
+            $params[] = $facultyId;
+        }
+
+        $sql .= " ORDER BY faculty_id IS NULL, id ASC LIMIT 1";
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute($params);
+        $result = $stmt->fetchColumn();
+        if ($result) {
+            return (int) $result;
+        }
+
+        if (!$createIfMissing) {
+            return null;
+        }
+
+        $insert = $pdo->prepare("
+            INSERT INTO departments (faculty_id, name, created_at, updated_at)
+            VALUES (?, ?, NOW(), NOW())
+        ");
+        $insert->execute([$facultyId, $value]);
+
+        return (int) $pdo->lastInsertId();
+    }
+}
+
+if (!function_exists('normalizePhoneNumber')) {
+    function normalizePhoneNumber(?string $rawValue): ?string
+    {
+        $value = trim((string) $rawValue);
+        if ($value === '') {
+            return null;
+        }
+
+        $normalized = preg_replace('/[^\d+]/', '', $value);
+        if ($normalized === null || $normalized === '') {
+            return null;
+        }
+
+        if (strpos($normalized, '00') === 0) {
+            $normalized = '+' . substr($normalized, 2);
+        }
+
+        if ($normalized[0] !== '+') {
+            if (preg_match('/^0\d{9}$/', $normalized) === 1) {
+                $normalized = '+254' . substr($normalized, 1);
+            } elseif (preg_match('/^254\d{9}$/', $normalized) === 1) {
+                $normalized = '+' . $normalized;
+            } elseif (preg_match('/^\d{9}$/', $normalized) === 1) {
+                $normalized = '+254' . $normalized;
+            }
+        }
+
+        if (preg_match('/^\+\d{9,15}$/', $normalized) !== 1) {
+            return null;
+        }
+
+        return $normalized;
+    }
+}
+
+if (!function_exists('buildNoticeAudienceConditions')) {
+    function buildNoticeAudienceConditions(PDO $pdo, string $alias, array $user): array
+    {
+        $conditions = [];
+        $params = [];
+        $targetColumn = getNoticeTargetColumn($pdo) ?: 'faculty_target';
+
+        if (featureColumnExists($pdo, 'notices', $targetColumn)) {
+            $conditions[] = "($alias.$targetColumn IS NULL OR $alias.$targetColumn = 0 OR $alias.$targetColumn = ?)";
+            $params[] = featureNullableInt($user['faculty_id'] ?? null);
+        }
+
+        if (featureColumnExists($pdo, 'notices', 'department_id')) {
+            $conditions[] = "($alias.department_id IS NULL OR $alias.department_id = 0 OR $alias.department_id = ?)";
+            $params[] = featureNullableInt($user['department_id'] ?? null);
+        }
+
+        if (featureColumnExists($pdo, 'notices', 'year_target')) {
+            $conditions[] = "($alias.year_target IS NULL OR $alias.year_target = 0 OR $alias.year_target = ?)";
+            $params[] = featureNullableInt($user['year'] ?? null);
+        }
+
+        if (featureColumnExists($pdo, 'notices', 'audience_roles_csv')) {
+            $conditions[] = "($alias.audience_roles_csv IS NULL OR $alias.audience_roles_csv = '' OR FIND_IN_SET(?, $alias.audience_roles_csv) > 0)";
+            $params[] = trim((string) ($user['role'] ?? ''));
+        }
+
+        return [$conditions, $params];
+    }
+}
+
 if (!function_exists('ensureNotificationPreferenceRow')) {
     function ensureNotificationPreferenceRow(PDO $pdo, int $userId): void
     {
@@ -263,6 +512,7 @@ if (!function_exists('getUserNotificationPreferences')) {
                 'user_id' => $userId,
                 'in_app_enabled' => 1,
                 'email_enabled' => 0,
+                'sms_enabled' => 0,
                 'emergency_override' => 1,
                 'quiet_hours_start' => null,
                 'quiet_hours_end' => null,
@@ -283,6 +533,7 @@ if (!function_exists('saveUserNotificationPreferences')) {
             UPDATE user_notification_preferences
             SET in_app_enabled = ?,
                 email_enabled = ?,
+                sms_enabled = ?,
                 emergency_override = ?,
                 quiet_hours_start = ?,
                 quiet_hours_end = ?,
@@ -293,6 +544,7 @@ if (!function_exists('saveUserNotificationPreferences')) {
         $stmt->execute([
             !empty($data['in_app_enabled']) ? 1 : 0,
             !empty($data['email_enabled']) ? 1 : 0,
+            !empty($data['sms_enabled']) ? 1 : 0,
             !empty($data['emergency_override']) ? 1 : 0,
             $data['quiet_hours_start'] ?: null,
             $data['quiet_hours_end'] ?: null,
@@ -387,6 +639,28 @@ if (!function_exists('shouldSendEmailNotification')) {
     }
 }
 
+if (!function_exists('shouldSendSmsNotification')) {
+    function shouldSendSmsNotification(array $prefs, array $notice): bool
+    {
+        if (empty($prefs['sms_enabled'])) {
+            return false;
+        }
+
+        $urgent = isUrgentNotice($notice);
+        $allowedCategory = userAllowsNoticeCategory($prefs, $notice['category'] ?? null);
+
+        if (!$allowedCategory && !$urgent) {
+            return false;
+        }
+
+        if (isWithinQuietHours($prefs['quiet_hours_start'] ?? null, $prefs['quiet_hours_end'] ?? null) && !$urgent) {
+            return false;
+        }
+
+        return true;
+    }
+}
+
 if (!function_exists('getNoticeById')) {
     function getNoticeById(PDO $pdo, int $noticeId): ?array
     {
@@ -408,17 +682,42 @@ if (!function_exists('getNoticeTargetUsers')) {
     function getNoticeTargetUsers(PDO $pdo, array $notice): array
     {
         $targetColumn = featureColumnExists($pdo, 'notices', 'faculty_target') ? 'faculty_target' : 'department_target';
-        $sql = "SELECT id, name, email FROM users WHERE role = 'student' AND is_active = 1";
+        $sql = "
+            SELECT
+                u.id,
+                u.name,
+                u.email,
+                u.phone_number,
+                u.role,
+                u.admin_type,
+                u.faculty_id,
+                u.department_id,
+                u.year
+            FROM users u
+            WHERE u.is_active = 1
+        ";
         $params = [];
 
         if (!empty($notice[$targetColumn])) {
-            $sql .= " AND faculty_id = ?";
+            $sql .= " AND u.faculty_id = ?";
             $params[] = $notice[$targetColumn];
         }
 
+        if (featureColumnExists($pdo, 'notices', 'department_id') && !empty($notice['department_id'])) {
+            $sql .= " AND u.department_id = ?";
+            $params[] = (int) $notice['department_id'];
+        }
+
         if (!empty($notice['year_target'])) {
-            $sql .= " AND year = ?";
+            $sql .= " AND u.year = ?";
             $params[] = $notice['year_target'];
+        }
+
+        $audienceRoles = normalizeAudienceRoles($notice['audience_roles_csv'] ?? '');
+        if (!empty($audienceRoles)) {
+            $placeholders = implode(', ', array_fill(0, count($audienceRoles), '?'));
+            $sql .= " AND u.role IN ($placeholders)";
+            $params = array_merge($params, $audienceRoles);
         }
 
         $stmt = $pdo->prepare($sql);
@@ -570,12 +869,99 @@ if (!function_exists('sendNoticeEmail')) {
     }
 }
 
+if (!function_exists('buildNoticeSmsBody')) {
+    function buildNoticeSmsBody(array $notice, array $user): string
+    {
+        $parts = [
+            'JOOUST Notice',
+            trim((string) ($notice['title'] ?? 'Campus Notice')),
+            trim((string) ($notice['category'] ?? 'General')),
+        ];
+
+        $message = implode(' | ', array_filter($parts));
+        $content = trim((string) ($notice['content'] ?? ''));
+        if ($content !== '') {
+            $message .= ': ' . preg_replace('/\s+/', ' ', $content);
+        }
+
+        if (!empty($notice['requires_acknowledgement'])) {
+            $message .= ' Reply in-app to acknowledge.';
+        }
+
+        if (function_exists('mb_substr')) {
+            return mb_substr($message, 0, 320);
+        }
+
+        return substr($message, 0, 320);
+    }
+}
+
+if (!function_exists('sendNoticeSms')) {
+    function sendNoticeSms(string $recipientPhone, string $message): array
+    {
+        $gatewayUrl = trim((string) getenv('SMS_GATEWAY_URL'));
+        $gatewayToken = trim((string) getenv('SMS_GATEWAY_TOKEN'));
+        $senderId = trim((string) getenv('SMS_SENDER_ID'));
+
+        if ($gatewayUrl === '') {
+            return ['success' => false, 'error' => 'SMS gateway is not configured.'];
+        }
+
+        if (!function_exists('curl_init')) {
+            return ['success' => false, 'error' => 'cURL is not available on this server.'];
+        }
+
+        $payload = json_encode([
+            'to' => $recipientPhone,
+            'message' => $message,
+            'sender_id' => $senderId !== '' ? $senderId : 'JOOUST',
+        ]);
+
+        if ($payload === false) {
+            return ['success' => false, 'error' => 'SMS payload could not be encoded.'];
+        }
+
+        $headers = [
+            'Accept: application/json',
+            'Content-Type: application/json',
+        ];
+        if ($gatewayToken !== '') {
+            $headers[] = 'Authorization: Bearer ' . $gatewayToken;
+        }
+
+        $handle = curl_init($gatewayUrl);
+        curl_setopt_array($handle, [
+            CURLOPT_POST => true,
+            CURLOPT_POSTFIELDS => $payload,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_CONNECTTIMEOUT => 10,
+            CURLOPT_TIMEOUT => 20,
+            CURLOPT_HTTPHEADER => $headers,
+        ]);
+
+        $response = curl_exec($handle);
+        $httpCode = (int) curl_getinfo($handle, CURLINFO_HTTP_CODE);
+        $curlError = curl_error($handle);
+        curl_close($handle);
+
+        if ($response === false) {
+            return ['success' => false, 'error' => $curlError !== '' ? $curlError : 'The SMS request failed.'];
+        }
+
+        if ($httpCode >= 200 && $httpCode < 300) {
+            return ['success' => true, 'error' => null];
+        }
+
+        return ['success' => false, 'error' => 'SMS gateway returned HTTP ' . $httpCode . '.'];
+    }
+}
+
 if (!function_exists('deliverNoticeToAudience')) {
     function deliverNoticeToAudience(PDO $pdo, int $noticeId): array
     {
         $notice = getNoticeById($pdo, $noticeId);
         if (!$notice || ($notice['status'] ?? '') !== 'published') {
-            return ['users' => 0, 'in_app' => 0, 'email_sent' => 0, 'email_failed' => 0];
+            return ['users' => 0, 'in_app' => 0, 'email_sent' => 0, 'email_failed' => 0, 'sms_sent' => 0, 'sms_failed' => 0];
         }
 
         $targetUsers = getNoticeTargetUsers($pdo, $notice);
@@ -588,6 +974,8 @@ if (!function_exists('deliverNoticeToAudience')) {
             'in_app' => 0,
             'email_sent' => 0,
             'email_failed' => 0,
+            'sms_sent' => 0,
+            'sms_failed' => 0,
         ];
 
         foreach ($targetUsers as $user) {
@@ -599,35 +987,73 @@ if (!function_exists('deliverNoticeToAudience')) {
             }
 
             if (in_array('email', $channels, true)) {
-                if (deliveryRecordExists($pdo, (int) $notice['id'], (int) $user['id'], 'email')) {
-                    continue;
+                if (!deliveryRecordExists($pdo, (int) $notice['id'], (int) $user['id'], 'email')) {
+                    if (!shouldSendEmailNotification($prefs, $notice)) {
+                        storeDeliveryResult(
+                            $pdo,
+                            (int) $notice['id'],
+                            (int) $user['id'],
+                            'email',
+                            $user['email'] ?? null,
+                            'skipped',
+                            'User preferences or quiet hours prevented email delivery.'
+                        );
+                    } else {
+                        $emailResult = sendNoticeEmail(
+                            (string) $user['email'],
+                            'JOOUST Notice: ' . ($notice['title'] ?? 'Campus Notice'),
+                            buildNoticeEmailBody($notice, $user)
+                        );
+
+                        if ($emailResult['success']) {
+                            storeDeliveryResult($pdo, (int) $notice['id'], (int) $user['id'], 'email', $user['email'], 'sent');
+                            $summary['email_sent']++;
+                        } else {
+                            storeDeliveryResult($pdo, (int) $notice['id'], (int) $user['id'], 'email', $user['email'], 'failed', $emailResult['error']);
+                            $summary['email_failed']++;
+                        }
+                    }
                 }
+            }
 
-                if (!shouldSendEmailNotification($prefs, $notice)) {
-                    storeDeliveryResult(
-                        $pdo,
-                        (int) $notice['id'],
-                        (int) $user['id'],
-                        'email',
-                        $user['email'] ?? null,
-                        'skipped',
-                        'User preferences or quiet hours prevented email delivery.'
-                    );
-                    continue;
-                }
+            if (in_array('sms', $channels, true)) {
+                if (!deliveryRecordExists($pdo, (int) $notice['id'], (int) $user['id'], 'sms')) {
+                    $destination = normalizePhoneNumber($user['phone_number'] ?? null);
 
-                $emailResult = sendNoticeEmail(
-                    (string) $user['email'],
-                    'JOOUST Notice: ' . ($notice['title'] ?? 'Campus Notice'),
-                    buildNoticeEmailBody($notice, $user)
-                );
+                    if (!$destination) {
+                        storeDeliveryResult(
+                            $pdo,
+                            (int) $notice['id'],
+                            (int) $user['id'],
+                            'sms',
+                            $user['phone_number'] ?? null,
+                            'skipped',
+                            'User does not have a valid phone number for SMS delivery.'
+                        );
+                    } elseif (!shouldSendSmsNotification($prefs, $notice)) {
+                        storeDeliveryResult(
+                            $pdo,
+                            (int) $notice['id'],
+                            (int) $user['id'],
+                            'sms',
+                            $destination,
+                            'skipped',
+                            'User preferences or quiet hours prevented SMS delivery.'
+                        );
+                    } else {
+                        $smsResult = sendNoticeSms(
+                            $destination,
+                            buildNoticeSmsBody($notice, $user)
+                        );
 
-                if ($emailResult['success']) {
-                    storeDeliveryResult($pdo, (int) $notice['id'], (int) $user['id'], 'email', $user['email'], 'sent');
-                    $summary['email_sent']++;
-                } else {
-                    storeDeliveryResult($pdo, (int) $notice['id'], (int) $user['id'], 'email', $user['email'], 'failed', $emailResult['error']);
-                    $summary['email_failed']++;
+                        if ($smsResult['success']) {
+                            storeDeliveryResult($pdo, (int) $notice['id'], (int) $user['id'], 'sms', $destination, 'sent');
+                            $summary['sms_sent']++;
+                        } else {
+                            storeDeliveryResult($pdo, (int) $notice['id'], (int) $user['id'], 'sms', $destination, 'failed', $smsResult['error']);
+                            $summary['sms_failed']++;
+                        }
+                    }
                 }
             }
         }
@@ -670,10 +1096,10 @@ if (!function_exists('saveNoticeTemplate')) {
     {
         $stmt = $pdo->prepare("
             INSERT INTO notice_templates (
-                name, title, content, category, faculty_target, year_target,
+                name, title, content, category, faculty_target, department_id, year_target, audience_roles_csv,
                 is_pinned, default_priority, requires_acknowledgement,
                 delivery_channels, is_recurring, recurrence_pattern, created_by
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ");
 
         $stmt->execute([
@@ -682,7 +1108,9 @@ if (!function_exists('saveNoticeTemplate')) {
             $data['content'],
             $data['category'],
             $data['faculty_target'] ?: null,
+            $data['department_id'] ?: null,
             $data['year_target'] ?: null,
+            arrayToCsvValue(normalizeAudienceRoles($data['audience_roles'] ?? ($data['audience_roles_csv'] ?? []))),
             !empty($data['is_pinned']) ? 1 : 0,
             $data['priority'] ?? 'normal',
             !empty($data['requires_acknowledgement']) ? 1 : 0,

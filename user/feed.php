@@ -13,9 +13,15 @@ if ($_SESSION['user_role'] !== 'student') {
 
 $userId = (int) $_SESSION['user_id'];
 $userFaculty = $_SESSION['faculty_id'] ?? null;
+$userDepartment = $_SESSION['department_id'] ?? null;
 $userYear = $_SESSION['year'] ?? null;
 $userName = $_SESSION['user_name'];
-$targetColumn = getNoticeTargetColumn($pdo) ?: 'faculty_target';
+$viewerProfile = [
+    'role' => 'student',
+    'faculty_id' => $userFaculty,
+    'department_id' => $userDepartment,
+    'year' => $userYear,
+];
 
 $unreadCount = 0;
 try {
@@ -31,6 +37,7 @@ try {
 $facultyName = $userFaculty ? getFacultyName($pdo, (int) $userFaculty) : '';
 $preferences = getUserNotificationPreferences($pdo, $userId);
 $subscribedCategories = csvValueToArray($preferences['categories_csv'] ?? '');
+[$audienceConditions, $audienceParams] = buildNoticeAudienceConditions($pdo, 'n', $viewerProfile);
 
 $sql = "
     SELECT
@@ -44,8 +51,8 @@ $sql = "
     WHERE n.status = 'published'
       AND (n.publish_at IS NULL OR n.publish_at <= NOW())
       AND (n.expire_at IS NULL OR n.expire_at > NOW())
-      AND (n.$targetColumn IS NULL OR n.$targetColumn = 0 OR n.$targetColumn = ?)
-      AND (n.year_target IS NULL OR n.year_target = 0 OR n.year_target = ?)
+      AND " . implode("
+      AND ", $audienceConditions) . "
     ORDER BY
       n.is_pinned DESC,
       CASE
@@ -65,7 +72,7 @@ $sql = "
 ";
 
 $stmt = $pdo->prepare($sql);
-$stmt->execute([$userId, $userId, $userFaculty, $userYear, $userId, $userId]);
+$stmt->execute(array_merge([$userId, $userId], $audienceParams, [$userId, $userId]));
 $notices = $stmt->fetchAll();
 
 $bookmarkStmt = $pdo->prepare('SELECT notice_id FROM bookmarks WHERE user_id = ?');

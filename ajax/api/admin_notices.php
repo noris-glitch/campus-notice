@@ -20,7 +20,9 @@ try {
             'success' => true,
             'notices' => apiFetchAdminNotices($pdo, $user),
             'faculties' => apiFetchFaculties($pdo),
+            'departments' => apiFetchDepartments($pdo, ($user['role'] ?? '') === 'admin' ? apiNullableInt($user['faculty_id'] ?? null) : null),
             'categories' => getAvailableNoticeCategories(),
+            'audience_roles' => getNoticeAudienceRoleOptions(),
             'templates' => fetchVisibleTemplates($pdo, (int) $user['id'], (string) $user['role']),
             'priorities' => apiAdminPriorities(),
             'years' => apiAdminYears(),
@@ -44,7 +46,10 @@ try {
         $category = (string) ($data['category'] ?? 'Academic');
         $priority = (string) ($data['priority'] ?? 'normal');
         $facultyTarget = apiNullableInt($data['faculty_target'] ?? null);
+        $departmentTargetInput = apiNullableString($data['department_target'] ?? ($data['department_id'] ?? null));
+        $departmentTargetId = null;
         $yearTarget = apiNullableInt($data['year_target'] ?? null);
+        $audienceRoles = normalizeAudienceRoles($data['audience_roles'] ?? ($data['audience_roles_csv'] ?? []));
         $publishAt = apiDateTimeOrNull($data['schedule_date'] ?? null) ?: date('Y-m-d H:i:s');
         $expireAt = apiDateTimeOrNull($data['expire_date'] ?? null, true);
         $requiresAcknowledgement = !empty($data['requires_acknowledgement']);
@@ -73,6 +78,29 @@ try {
 
         if ($userRole === 'admin' && $adminFaculty) {
             $facultyTarget = $facultyTarget ?: $adminFaculty;
+        }
+
+        if ($departmentTargetInput !== null) {
+            $departmentTargetId = resolveDepartmentId($pdo, $departmentTargetInput, $facultyTarget, true);
+            if (!$departmentTargetId) {
+                apiRespond(400, ['success' => false, 'error' => 'Choose a valid target department']);
+            }
+
+            $department = fetchDepartmentById($pdo, $departmentTargetId);
+            if ($department) {
+                $departmentFacultyId = !empty($department['faculty_id']) ? (int) $department['faculty_id'] : null;
+                if ($facultyTarget === null && $departmentFacultyId !== null) {
+                    $facultyTarget = $departmentFacultyId;
+                }
+
+                if ($facultyTarget !== null && $departmentFacultyId !== null && $departmentFacultyId !== (int) $facultyTarget) {
+                    apiRespond(400, ['success' => false, 'error' => 'That department does not belong to the selected faculty']);
+                }
+
+                if ($userRole === 'admin' && $adminFaculty && $departmentFacultyId !== null && $departmentFacultyId !== (int) $adminFaculty) {
+                    apiRespond(400, ['success' => false, 'error' => 'You can only target departments inside your faculty']);
+                }
+            }
         }
 
         if ($title === '' || $content === '') {
@@ -135,11 +163,11 @@ try {
         $stmt = $pdo->prepare("
             INSERT INTO notices (
                 title, content, category, priority, attachment, posted_by,
-                faculty_target, year_target, is_pinned, requires_acknowledgement,
+                faculty_target, department_id, year_target, audience_roles_csv, is_pinned, requires_acknowledgement,
                 acknowledgement_due_at, expire_at, publish_at, status, approval_status,
                 reviewed_by, reviewed_at, delivery_channels, template_id, recurrence_pattern,
                 latitude, longitude, location_name, location_address, radius_km, event_date, event_end_date, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
         ");
 
         $stmt->execute([
@@ -150,7 +178,9 @@ try {
             $attachment,
             $userId,
             $facultyTarget,
+            $departmentTargetId,
             $yearTarget,
+            arrayToCsvValue($audienceRoles),
             $isPinned,
             $requiresAcknowledgement ? 1 : 0,
             $ackDueAt,
@@ -182,7 +212,9 @@ try {
                 'content' => $content,
                 'category' => $category,
                 'faculty_target' => $facultyTarget,
+                'department_id' => $departmentTargetId,
                 'year_target' => $yearTarget,
+                'audience_roles' => $audienceRoles,
                 'is_pinned' => $isPinned,
                 'priority' => $priority,
                 'requires_acknowledgement' => $requiresAcknowledgement ? 1 : 0,

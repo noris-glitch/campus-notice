@@ -9,7 +9,13 @@ if (!isset($_SESSION['user_id'])) {
 $noticeId = (int) ($_GET['id'] ?? 0);
 $userId = (int) $_SESSION['user_id'];
 $userRole = $_SESSION['user_role'];
-$targetColumn = getNoticeTargetColumn($pdo) ?: 'faculty_target';
+$viewerProfile = [
+    'role' => $userRole,
+    'faculty_id' => $_SESSION['faculty_id'] ?? null,
+    'department_id' => $_SESSION['department_id'] ?? null,
+    'year' => $_SESSION['year'] ?? null,
+    'admin_type' => $_SESSION['admin_type'] ?? null,
+];
 $success = '';
 $errors = [];
 
@@ -18,9 +24,10 @@ if ($noticeId <= 0) {
     exit();
 }
 
-function fetchNoticeForViewer(PDO $pdo, int $noticeId, int $userId, string $userRole, string $targetColumn): ?array
+function fetchNoticeForViewer(PDO $pdo, int $noticeId, int $userId, string $userRole, array $viewerProfile): ?array
 {
     if ($userRole === 'student') {
+        [$audienceConditions, $audienceParams] = buildNoticeAudienceConditions($pdo, 'n', $viewerProfile);
         $stmt = $pdo->prepare("
             SELECT
                 n.*,
@@ -38,11 +45,11 @@ function fetchNoticeForViewer(PDO $pdo, int $noticeId, int $userId, string $user
               AND n.status = 'published'
               AND (n.publish_at IS NULL OR n.publish_at <= NOW())
               AND (n.expire_at IS NULL OR n.expire_at > NOW())
-              AND (n.$targetColumn IS NULL OR n.$targetColumn = 0 OR n.$targetColumn = ?)
-              AND (n.year_target IS NULL OR n.year_target = 0 OR n.year_target = ?)
+              AND " . implode("
+              AND ", $audienceConditions) . "
             LIMIT 1
         ");
-        $stmt->execute([$userId, $noticeId, $_SESSION['faculty_id'] ?? null, $_SESSION['year'] ?? null]);
+        $stmt->execute(array_merge([$userId, $noticeId], $audienceParams));
         return $stmt->fetch() ?: null;
     }
 
@@ -66,7 +73,7 @@ function fetchNoticeForViewer(PDO $pdo, int $noticeId, int $userId, string $user
     return $stmt->fetch() ?: null;
 }
 
-$notice = fetchNoticeForViewer($pdo, $noticeId, $userId, $userRole, $targetColumn);
+$notice = fetchNoticeForViewer($pdo, $noticeId, $userId, $userRole, $viewerProfile);
 if (!$notice) {
     header('Location: feed.php');
     exit();
@@ -147,7 +154,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
 
-    $notice = fetchNoticeForViewer($pdo, $noticeId, $userId, $userRole, $targetColumn);
+    $notice = fetchNoticeForViewer($pdo, $noticeId, $userId, $userRole, $viewerProfile);
 }
 
 $trackStmt = $pdo->prepare('INSERT IGNORE INTO notice_views (notice_id, user_id) VALUES (?, ?)');

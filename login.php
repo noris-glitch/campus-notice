@@ -29,6 +29,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         $_SESSION['user_role'] = $user['role'];
         $_SESSION['admin_type'] = $user['admin_type'] ?? null;
         $_SESSION['faculty_id'] = $user['faculty_id'] ?? null;
+        $_SESSION['department_id'] = $user['department_id'] ?? null;
         $_SESSION['year'] = $user['year'] ?? null;
         
         if($user['role'] == 'super_admin') {
