@@ -5,6 +5,35 @@ $username = getenv('DB_USER') ?: 'avnadmin';
 $password = getenv('DB_PASS') ?: '';
 $port = getenv('DB_PORT') ?: '24772';
 
+function isMobileApiRequest(): bool
+{
+    $requestUri = (string) ($_SERVER['REQUEST_URI'] ?? '');
+    return strpos($requestUri, '/ajax/api/') !== false;
+}
+
+function emitDatabaseFailure(string $message): void
+{
+    if (isMobileApiRequest()) {
+        if (!headers_sent()) {
+            http_response_code(503);
+            header('Content-Type: application/json');
+            header('Access-Control-Allow-Origin: *');
+            header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
+            header('Access-Control-Allow-Headers: Content-Type, Accept');
+        }
+
+        echo json_encode([
+            'success' => false,
+            'error' => 'The campus service is temporarily unavailable. Please try again in a few minutes.',
+            'details' => $message,
+        ]);
+        exit();
+    }
+
+    http_response_code(503);
+    die($message);
+}
+
 try {
     $dsn = "mysql:host=$host;port=$port;dbname=$dbname;charset=utf8mb4";
 
@@ -18,7 +47,7 @@ try {
     $pdo = new PDO($dsn, $username, $password, $options);
 
 } catch(PDOException $e) {
-    die("Connection failed: " . $e->getMessage());
+    emitDatabaseFailure("Connection failed: " . $e->getMessage());
 }
 
 if (session_status() === PHP_SESSION_NONE) {
