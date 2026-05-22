@@ -1,4 +1,7 @@
 <?php
+ini_set('display_errors', '0');
+error_reporting(E_ALL);
+
 require_once __DIR__ . '/../../config/database.php';
 
 header('Content-Type: application/json');
@@ -29,6 +32,52 @@ function apiRequireMethod(array $methods): void
     }
 }
 
+function apiIniSizeToBytes(string $value): int
+{
+    $trimmed = trim($value);
+    if ($trimmed === '') {
+        return 0;
+    }
+
+    $unit = strtolower(substr($trimmed, -1));
+    $number = (float) $trimmed;
+
+    switch ($unit) {
+        case 'g':
+            return (int) round($number * 1024 * 1024 * 1024);
+        case 'm':
+            return (int) round($number * 1024 * 1024);
+        case 'k':
+            return (int) round($number * 1024);
+        default:
+            return (int) round((float) $trimmed);
+    }
+}
+
+function apiRejectOversizedPost(): void
+{
+    $requestMethod = $_SERVER['REQUEST_METHOD'] ?? 'GET';
+    if ($requestMethod !== 'POST') {
+        return;
+    }
+
+    $contentLength = isset($_SERVER['CONTENT_LENGTH']) ? (int) $_SERVER['CONTENT_LENGTH'] : 0;
+    if ($contentLength <= 0) {
+        return;
+    }
+
+    $maxPostBytes = apiIniSizeToBytes((string) ini_get('post_max_size'));
+    if ($maxPostBytes <= 0 || $contentLength <= $maxPostBytes) {
+        return;
+    }
+
+    $configuredLimit = ini_get('post_max_size') ?: 'the server limit';
+    apiRespond(413, [
+        'success' => false,
+        'error' => 'That upload is too large for the server right now. Please keep shorts under ' . $configuredLimit . '.',
+    ]);
+}
+
 function apiRequestData(): array
 {
     $rawBody = file_get_contents('php://input');
@@ -40,6 +89,8 @@ function apiRequestData(): array
 
     return $_POST;
 }
+
+apiRejectOversizedPost();
 
 function apiBuildToken(array $user): string
 {

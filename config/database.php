@@ -50,7 +50,7 @@ try {
     emitDatabaseFailure("Connection failed: " . $e->getMessage());
 }
 
-if (session_status() === PHP_SESSION_NONE) {
+if (!isMobileApiRequest() && session_status() === PHP_SESSION_NONE && !headers_sent()) {
     session_start();
 }
 
