@@ -91,6 +91,28 @@ if (!function_exists('ensureFeatureSchema')) {
         ");
 
         $pdo->exec("
+            CREATE TABLE IF NOT EXISTS `feedback_messages` (
+                `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+                `submitted_by` INT UNSIGNED NOT NULL,
+                `category` VARCHAR(80) NOT NULL DEFAULT 'General',
+                `subject` VARCHAR(180) NOT NULL,
+                `message` TEXT NOT NULL,
+                `status` VARCHAR(20) NOT NULL DEFAULT 'open',
+                `admin_response` TEXT NULL,
+                `responded_by` INT UNSIGNED NULL,
+                `responded_at` DATETIME NULL,
+                `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                PRIMARY KEY (`id`),
+                KEY `idx_feedback_messages_submitted_by` (`submitted_by`),
+                KEY `idx_feedback_messages_status` (`status`),
+                KEY `idx_feedback_messages_responded_by` (`responded_by`),
+                CONSTRAINT `fk_feedback_messages_submitted_by` FOREIGN KEY (`submitted_by`) REFERENCES `users` (`id`) ON DELETE CASCADE ON UPDATE CASCADE,
+                CONSTRAINT `fk_feedback_messages_responded_by` FOREIGN KEY (`responded_by`) REFERENCES `users` (`id`) ON DELETE SET NULL ON UPDATE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        ");
+
+        $pdo->exec("
             CREATE TABLE IF NOT EXISTS `notice_templates` (
                 `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
                 `name` VARCHAR(150) NOT NULL,
