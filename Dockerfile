@@ -7,4 +7,4 @@ WORKDIR /app
 COPY php.ini /usr/local/etc/php/conf.d/campusnotice.ini
 COPY . /app/
 EXPOSE 80
-CMD ["php", "-S", "0.0.0.0:80", "-t", "/app"]
+CMD ["sh", "-c", "php -S 0.0.0.0:${PORT:-10000} -t /app"]
