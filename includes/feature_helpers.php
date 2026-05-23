@@ -214,6 +214,10 @@ if (!function_exists('ensureFeatureSchema')) {
                 `year_target` TINYINT UNSIGNED NULL,
                 `audience_roles_csv` VARCHAR(100) NULL,
                 `status` VARCHAR(20) NOT NULL DEFAULT 'published',
+                `approval_status` VARCHAR(20) NOT NULL DEFAULT 'approved',
+                `review_notes` TEXT NULL,
+                `reviewed_by` INT UNSIGNED NULL,
+                `reviewed_at` DATETIME NULL,
                 `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                 PRIMARY KEY (`id`),
@@ -275,6 +279,9 @@ if (!function_exists('ensureFeatureSchema')) {
         $userColumns = [
             'phone_number' => "ALTER TABLE `users` ADD COLUMN `phone_number` VARCHAR(30) NULL AFTER `email`",
             'department_id' => "ALTER TABLE `users` ADD COLUMN `department_id` INT UNSIGNED NULL AFTER `faculty_id`",
+            'can_post_shorts' => "ALTER TABLE `users` ADD COLUMN `can_post_shorts` TINYINT(1) NOT NULL DEFAULT 0 AFTER `is_active`",
+            'shorts_authorized_by' => "ALTER TABLE `users` ADD COLUMN `shorts_authorized_by` INT UNSIGNED NULL AFTER `can_post_shorts`",
+            'shorts_authorized_at' => "ALTER TABLE `users` ADD COLUMN `shorts_authorized_at` DATETIME NULL AFTER `shorts_authorized_by`",
         ];
 
         foreach ($userColumns as $column => $sql) {
@@ -294,6 +301,19 @@ if (!function_exists('ensureFeatureSchema')) {
 
         foreach ($templateColumns as $column => $sql) {
             if (!featureColumnExists($pdo, 'notice_templates', $column)) {
+                $pdo->exec($sql);
+            }
+        }
+
+        $shortColumns = [
+            'approval_status' => "ALTER TABLE `shorts` ADD COLUMN `approval_status` VARCHAR(20) NOT NULL DEFAULT 'approved' AFTER `status`",
+            'review_notes' => "ALTER TABLE `shorts` ADD COLUMN `review_notes` TEXT NULL AFTER `approval_status`",
+            'reviewed_by' => "ALTER TABLE `shorts` ADD COLUMN `reviewed_by` INT UNSIGNED NULL AFTER `review_notes`",
+            'reviewed_at' => "ALTER TABLE `shorts` ADD COLUMN `reviewed_at` DATETIME NULL AFTER `reviewed_by`",
+        ];
+
+        foreach ($shortColumns as $column => $sql) {
+            if (!featureColumnExists($pdo, 'shorts', $column)) {
                 $pdo->exec($sql);
             }
         }
@@ -575,6 +595,73 @@ if (!function_exists('buildShortAudienceConditions')) {
         }
 
         return [$conditions, $params];
+    }
+}
+
+if (!function_exists('canUserPostShorts')) {
+    function canUserPostShorts(array $user): bool
+    {
+        $role = (string) ($user['role'] ?? '');
+
+        if ($role === 'super_admin') {
+            return true;
+        }
+
+        if ($role === 'student') {
+            return false;
+        }
+
+        return !empty($user['can_post_shorts']);
+    }
+}
+
+if (!function_exists('shouldRestrictShortFeedToSuperAdmin')) {
+    function shouldRestrictShortFeedToSuperAdmin(array $user): bool
+    {
+        return !canUserPostShorts($user);
+    }
+}
+
+if (!function_exists('canUserModerateShort')) {
+    function canUserModerateShort(array $user, array $short): bool
+    {
+        if (($user['role'] ?? '') === 'super_admin') {
+            return true;
+        }
+
+        if (($user['role'] ?? '') !== 'admin') {
+            return false;
+        }
+
+        $adminFaculty = featureNullableInt($user['faculty_id'] ?? null);
+        $shortFaculty = featureNullableInt($short['faculty_target'] ?? null);
+
+        return $adminFaculty !== null && $shortFaculty !== null && $adminFaculty === $shortFaculty;
+    }
+}
+
+if (!function_exists('canUserManageShort')) {
+    function canUserManageShort(array $user, array $short): bool
+    {
+        if (canUserModerateShort($user, $short)) {
+            return true;
+        }
+
+        return (int) ($short['posted_by'] ?? 0) === (int) ($user['id'] ?? 0);
+    }
+}
+
+if (!function_exists('shortStatusLabel')) {
+    function shortStatusLabel(string $status): string
+    {
+        $map = [
+            'published' => 'Published',
+            'pending_review' => 'Pending Review',
+            'rejected' => 'Rejected',
+            'archived' => 'Archived',
+        ];
+
+        return $map[$status] ?? ucfirst(str_replace('_', ' ', $status));
     }
 }
 
