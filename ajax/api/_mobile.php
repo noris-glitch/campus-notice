@@ -772,7 +772,9 @@ function apiFetchAdminDashboard(PDO $pdo, array $user, string $analyticsRange = 
             'total_views' => (int) $pdo->query('SELECT COUNT(*) FROM notice_views')->fetchColumn(),
             'total_bookmarks' => (int) $pdo->query('SELECT COUNT(*) FROM bookmarks')->fetchColumn(),
             'pending_approvals' => (int) $pdo->query("SELECT COUNT(*) FROM notices WHERE status = 'pending_review'")->fetchColumn(),
-            'open_questions' => (int) $pdo->query("SELECT COUNT(*) FROM notice_questions WHERE status = 'open'")->fetchColumn(),
+            'open_questions' => featureTableExists($pdo, 'notice_questions')
+                ? (int) $pdo->query("SELECT COUNT(*) FROM notice_questions WHERE status = 'open'")->fetchColumn()
+                : 0,
         ];
 
         $recentNoticeStmt = $pdo->query("
@@ -826,14 +828,18 @@ function apiFetchAdminDashboard(PDO $pdo, array $user, string $analyticsRange = 
         $countStmt->execute([$userId]);
         $summary['pending_approvals'] = (int) $countStmt->fetchColumn();
 
-        $countStmt = $pdo->prepare("
-            SELECT COUNT(*)
-            FROM notice_questions nq
-            JOIN notices n ON nq.notice_id = n.id
-            WHERE n.posted_by = ? AND nq.status = 'open'
-        ");
-        $countStmt->execute([$userId]);
-        $summary['open_questions'] = (int) $countStmt->fetchColumn();
+        if (featureTableExists($pdo, 'notice_questions')) {
+            $countStmt = $pdo->prepare("
+                SELECT COUNT(*)
+                FROM notice_questions nq
+                JOIN notices n ON nq.notice_id = n.id
+                WHERE n.posted_by = ? AND nq.status = 'open'
+            ");
+            $countStmt->execute([$userId]);
+            $summary['open_questions'] = (int) $countStmt->fetchColumn();
+        } else {
+            $summary['open_questions'] = 0;
+        }
 
         $recentNoticeStmt = $pdo->prepare("
             SELECT
@@ -857,11 +863,33 @@ function apiFetchAdminDashboard(PDO $pdo, array $user, string $analyticsRange = 
         $recentStudentStmt->execute([$facultyId]);
     }
 
+    $analytics = ['range' => $analyticsRange, 'series' => []];
+    $reports = [
+        'total_notices_posted' => (int) ($summary['total_notices'] ?? 0),
+        'views_per_notice' => [],
+        'most_viewed_notices' => [],
+        'user_engagement' => [],
+        'department_activity' => [],
+        'updated_at' => date('Y-m-d H:i:s'),
+    ];
+
+    try {
+        $analytics = apiFetchAdminAnalytics($pdo, $user, $analyticsRange);
+    } catch (Throwable $e) {
+        // Keep dashboard alive even when analytics tables are missing.
+    }
+
+    try {
+        $reports = apiFetchAdminReports($pdo, $user);
+    } catch (Throwable $e) {
+        // Keep dashboard alive even when report tables are missing.
+    }
+
     return array_merge($summary, [
         'recent_notices' => $recentNoticeStmt->fetchAll(),
         'recent_students' => $recentStudentStmt->fetchAll(),
-        'analytics' => apiFetchAdminAnalytics($pdo, $user, $analyticsRange),
-        'reports' => apiFetchAdminReports($pdo, $user),
+        'analytics' => $analytics,
+        'reports' => $reports,
     ]);
 }
 
@@ -928,6 +956,24 @@ function apiSeriesFromQuery(PDO $pdo, string $sql, array $params, string $range)
 
 function apiFetchAdminAnalytics(PDO $pdo, array $user, string $range = 'weekly'): array
 {
+    if (!featureTableExists($pdo, 'user_activity_log')
+        || !featureTableExists($pdo, 'notice_views')
+        || !featureTableExists($pdo, 'notifications')
+        || !featureTableExists($pdo, 'notices')) {
+        return [
+            'range' => $range,
+            'series' => [
+                'logins' => ['labels' => [], 'points' => []],
+                'notices_viewed' => ['labels' => [], 'points' => []],
+                'notices_posted' => ['labels' => [], 'points' => []],
+                'notice_downloads' => ['labels' => [], 'points' => []],
+                'notice_comments' => ['labels' => [], 'points' => []],
+                'active_users' => ['labels' => [], 'points' => []],
+                'notifications_read' => ['labels' => [], 'points' => []],
+            ],
+        ];
+    }
+
     $range = in_array($range, ['daily', 'weekly', 'monthly'], true) ? $range : 'weekly';
     $cfg = apiAnalyticsRangeConfig($range);
     [$noticeScopeClause, $noticeScopeParams] = apiUserScopeClause($user, 'n', 'u');
@@ -1019,6 +1065,21 @@ function apiFetchAdminAnalytics(PDO $pdo, array $user, string $range = 'weekly')
 
 function apiFetchAdminReports(PDO $pdo, array $user): array
 {
+    if (!featureTableExists($pdo, 'notices')
+        || !featureTableExists($pdo, 'notice_views')
+        || !featureTableExists($pdo, 'bookmarks')
+        || !featureTableExists($pdo, 'departments')
+        || !featureTableExists($pdo, 'users')) {
+        return [
+            'total_notices_posted' => 0,
+            'views_per_notice' => [],
+            'most_viewed_notices' => [],
+            'user_engagement' => [],
+            'department_activity' => [],
+            'updated_at' => date('Y-m-d H:i:s'),
+        ];
+    }
+
     [$noticeScopeClause, $noticeScopeParams] = apiUserScopeClause($user, 'n', 'u');
 
     $totalStmt = $pdo->prepare("SELECT COUNT(*) FROM notices n " . $noticeScopeClause);
