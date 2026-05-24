@@ -972,27 +972,17 @@ function apiSeriesFromQuery(PDO $pdo, string $sql, array $params, string $range)
 
 function apiFetchAdminAnalytics(PDO $pdo, array $user, string $range = 'weekly'): array
 {
-    if (!featureTableExists($pdo, 'user_activity_log')
-        || !featureTableExists($pdo, 'notice_views')
-        || !featureTableExists($pdo, 'notifications')
-        || !featureTableExists($pdo, 'notices')) {
-        return [
-            'range' => $range,
-            'series' => [
-                'logins' => ['labels' => [], 'points' => []],
-                'notices_viewed' => ['labels' => [], 'points' => []],
-                'notices_posted' => ['labels' => [], 'points' => []],
-                'notice_downloads' => ['labels' => [], 'points' => []],
-                'notice_comments' => ['labels' => [], 'points' => []],
-                'active_users' => ['labels' => [], 'points' => []],
-                'notifications_read' => ['labels' => [], 'points' => []],
-            ],
-        ];
-    }
-
     $range = in_array($range, ['daily', 'weekly', 'monthly'], true) ? $range : 'weekly';
     $cfg = apiAnalyticsRangeConfig($range);
     [$noticeScopeClause, $noticeScopeParams] = apiUserScopeClause($user, 'n', 'u');
+    $labels = apiBuildTimelineLabels($range);
+    $zeroSeries = ['labels' => $labels, 'points' => array_fill(0, count($labels), 0)];
+
+    $hasNotices = featureTableExists($pdo, 'notices');
+    $hasNoticeViews = featureTableExists($pdo, 'notice_views');
+    $hasNotifications = featureTableExists($pdo, 'notifications');
+    $hasActivityLog = featureTableExists($pdo, 'user_activity_log');
+    $hasNoticeQuestions = featureTableExists($pdo, 'notice_questions');
 
     $noticePostedSql = "
         SELECT DATE_FORMAT(bucket.bucket_key, '%Y-%m-%d') AS bucket_key, bucket.total
@@ -1068,13 +1058,13 @@ function apiFetchAdminAnalytics(PDO $pdo, array $user, string $range = 'weekly')
     return [
         'range' => $range,
         'series' => [
-            'logins' => apiSeriesFromQuery($pdo, $loginSql, [], $range),
-            'notices_viewed' => apiSeriesFromQuery($pdo, $viewsSql, $noticeScopeParams, $range),
-            'notices_posted' => apiSeriesFromQuery($pdo, $noticePostedSql, $noticeScopeParams, $range),
-            'notice_downloads' => apiSeriesFromQuery($pdo, $downloadsSql, [], $range),
-            'notice_comments' => apiSeriesFromQuery($pdo, $commentsSql, $noticeScopeParams, $range),
-            'active_users' => apiSeriesFromQuery($pdo, $activeUsersSql, [], $range),
-            'notifications_read' => apiSeriesFromQuery($pdo, $notifReadSql, [], $range),
+            'logins' => $hasActivityLog ? apiSeriesFromQuery($pdo, $loginSql, [], $range) : $zeroSeries,
+            'notices_viewed' => ($hasNotices && $hasNoticeViews) ? apiSeriesFromQuery($pdo, $viewsSql, $noticeScopeParams, $range) : $zeroSeries,
+            'notices_posted' => $hasNotices ? apiSeriesFromQuery($pdo, $noticePostedSql, $noticeScopeParams, $range) : $zeroSeries,
+            'notice_downloads' => $hasActivityLog ? apiSeriesFromQuery($pdo, $downloadsSql, [], $range) : $zeroSeries,
+            'notice_comments' => ($hasNotices && $hasNoticeQuestions) ? apiSeriesFromQuery($pdo, $commentsSql, $noticeScopeParams, $range) : $zeroSeries,
+            'active_users' => $hasActivityLog ? apiSeriesFromQuery($pdo, $activeUsersSql, [], $range) : $zeroSeries,
+            'notifications_read' => $hasNotifications ? apiSeriesFromQuery($pdo, $notifReadSql, [], $range) : $zeroSeries,
         ],
     ];
 }
