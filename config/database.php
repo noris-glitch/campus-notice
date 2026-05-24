@@ -4,6 +4,12 @@ $dbname = getenv('DB_NAME') ?: 'defaultdb';
 $username = getenv('DB_USER') ?: 'avnadmin';
 $password = getenv('DB_PASS') ?: '';
 $port = getenv('DB_PORT') ?: '24772';
+$appTimezone = getenv('APP_TIMEZONE') ?: 'Africa/Nairobi';
+$databaseTimezone = getenv('DB_TIMEZONE') ?: '+03:00';
+
+if (function_exists('date_default_timezone_set')) {
+    @date_default_timezone_set($appTimezone);
+}
 
 function isMobileApiRequest(): bool
 {
@@ -45,6 +51,13 @@ try {
     ];
 
     $pdo = new PDO($dsn, $username, $password, $options);
+    if (preg_match('/^[+-](?:0\d|1\d|2[0-3]):[0-5]\d$/', $databaseTimezone)) {
+        try {
+            $pdo->exec("SET time_zone = " . $pdo->quote($databaseTimezone));
+        } catch (PDOException $timezoneError) {
+            // Leave the default DB timezone in place if this session override fails.
+        }
+    }
 
 } catch(PDOException $e) {
     emitDatabaseFailure("Connection failed: " . $e->getMessage());

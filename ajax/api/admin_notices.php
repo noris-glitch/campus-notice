@@ -236,11 +236,23 @@ try {
             }
         }
 
+        $message = 'Notice saved successfully';
+        if ($status === 'published') {
+            $targetUsers = (int) ($deliverySummary['users'] ?? 0);
+            $message = $targetUsers > 0
+                ? 'Notice published successfully'
+                : 'Notice was published, but no matching users can see it. Check the faculty, department, year, and audience role targeting.';
+        } elseif ($status === 'scheduled') {
+            $message = 'Notice scheduled successfully';
+        } elseif ($status === 'pending_review') {
+            $message = 'Notice submitted for review successfully';
+        }
+
         logActivity($pdo, $userId, 'mobile_notice_created', 'Notice ID ' . $newNoticeId . ' created with status ' . $status);
 
         apiRespond(200, [
             'success' => true,
-            'message' => 'Notice saved successfully',
+            'message' => $message,
             'notice_id' => $newNoticeId,
             'status' => $status,
             'delivery_summary' => $deliverySummary,
