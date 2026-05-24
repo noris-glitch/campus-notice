@@ -183,7 +183,11 @@ try {
     }
 
     $data = apiRequestData();
-    $user = apiFetchAuthenticatedUser($pdo, $data);
+    $authSource = $data;
+    if (isset($data['auth_user_id'])) {
+        $authSource['user_id'] = (int) $data['auth_user_id'];
+    }
+    $user = apiFetchAuthenticatedUser($pdo, $authSource);
     apiRequireSuperAdminForUsers($user);
 
     $action = trim((string) ($data['action'] ?? ''));
@@ -556,3 +560,4 @@ try {
     apiRespond(500, ['success' => false, 'error' => 'User management action failed right now']);
 }
 ?>
+

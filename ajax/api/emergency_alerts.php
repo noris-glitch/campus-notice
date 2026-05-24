@@ -21,13 +21,50 @@ function apiEmergencySeverities(): array
     ];
 }
 
-function apiFetchEmergencyAlertsList(PDO $pdo): array
+function apiEmergencyAudienceConditions(PDO $pdo, array $user): array
+{
+    $conditions = [];
+    $params = [];
+
+    if (($user['role'] ?? '') === 'super_admin') {
+        return [$conditions, $params];
+    }
+
+    if (featureColumnExists($pdo, 'emergency_alerts', 'is_active')) {
+        $conditions[] = 'ea.is_active = 1';
+    }
+
+    $conditions[] = '(ea.expires_at IS NULL OR ea.expires_at > NOW())';
+
+    if (featureColumnExists($pdo, 'emergency_alerts', 'target_faculty')) {
+        $conditions[] = '(ea.target_faculty IS NULL OR ea.target_faculty = 0 OR ea.target_faculty = ?)';
+        $params[] = apiNullableInt($user['faculty_id'] ?? null);
+    }
+
+    if (featureColumnExists($pdo, 'emergency_alerts', 'target_year')) {
+        $userYear = apiNullableInt($user['year'] ?? null);
+        if ($userYear === null) {
+            $conditions[] = '(ea.target_year IS NULL OR ea.target_year = 0)';
+        } else {
+            $conditions[] = '(ea.target_year IS NULL OR ea.target_year = 0 OR ea.target_year = ?)';
+            $params[] = $userYear;
+        }
+    }
+
+    return [$conditions, $params];
+}
+
+function apiFetchEmergencyAlertsList(PDO $pdo, array $user): array
 {
     if (!featureTableExists($pdo, 'emergency_alerts')) {
         return [];
     }
 
-    $stmt = $pdo->query("
+    [$conditions, $params] = apiEmergencyAudienceConditions($pdo, $user);
+    $where = empty($conditions) ? '' : 'WHERE ' . implode(' AND ', $conditions);
+
+    $stmt = $pdo->prepare(
+        "
         SELECT
             ea.*,
             u.name AS author_name,
@@ -35,40 +72,49 @@ function apiFetchEmergencyAlertsList(PDO $pdo): array
             (SELECT COUNT(*) FROM emergency_alert_receipts WHERE alert_id = ea.id AND is_read = 1) AS read_count
         FROM emergency_alerts ea
         LEFT JOIN users u ON ea.created_by = u.id
+        $where
         ORDER BY ea.created_at DESC
         LIMIT 40
-    ");
+    "
+    );
+    $stmt->execute($params);
 
     return $stmt->fetchAll();
 }
 
-function apiCountActiveEmergencyAlerts(PDO $pdo): int
+function apiCountActiveEmergencyAlerts(PDO $pdo, array $user): int
 {
     if (!featureTableExists($pdo, 'emergency_alerts')) {
         return 0;
     }
 
-    if (featureColumnExists($pdo, 'emergency_alerts', 'is_active')) {
-        $stmt = $pdo->query("SELECT COUNT(*) FROM emergency_alerts WHERE is_active = 1 AND (expires_at IS NULL OR expires_at > NOW())");
-        return (int) $stmt->fetchColumn();
+    [$conditions, $params] = apiEmergencyAudienceConditions($pdo, $user);
+    if (($user['role'] ?? '') === 'super_admin') {
+        $conditions[] = featureColumnExists($pdo, 'emergency_alerts', 'is_active')
+            ? 'ea.is_active = 1'
+            : '1 = 1';
+        $conditions[] = '(ea.expires_at IS NULL OR ea.expires_at > NOW())';
     }
 
-    $stmt = $pdo->query("SELECT COUNT(*) FROM emergency_alerts WHERE expires_at IS NULL OR expires_at > NOW()");
+    $where = empty($conditions) ? '' : 'WHERE ' . implode(' AND ', $conditions);
+    $stmt = $pdo->prepare("SELECT COUNT(*) FROM emergency_alerts ea $where");
+    $stmt->execute($params);
     return (int) $stmt->fetchColumn();
 }
 
 try {
     if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'GET') {
         $user = apiFetchAuthenticatedUser($pdo, $_GET);
-        apiRequireSuperAdmin($user);
+        $canCreate = (($user['role'] ?? '') === 'super_admin');
 
         apiRespond(200, [
             'success' => true,
-            'active_count' => apiCountActiveEmergencyAlerts($pdo),
-            'alerts' => apiFetchEmergencyAlertsList($pdo),
-            'faculties' => apiFetchFaculties($pdo),
+            'active_count' => apiCountActiveEmergencyAlerts($pdo, $user),
+            'alerts' => apiFetchEmergencyAlertsList($pdo, $user),
+            'faculties' => $canCreate ? apiFetchFaculties($pdo) : [],
             'severities' => apiEmergencySeverities(),
-            'years' => apiAdminYears(),
+            'years' => $canCreate ? apiAdminYears() : [],
+            'can_create' => $canCreate,
         ]);
     }
 
@@ -100,10 +146,12 @@ try {
         apiRespond(400, ['success' => false, 'error' => 'Choose a valid emergency severity']);
     }
 
-    $insert = $pdo->prepare("
+    $insert = $pdo->prepare(
+        '
         INSERT INTO emergency_alerts (title, message, severity, target_faculty, target_year, expires_at, created_by)
         VALUES (?, ?, ?, ?, ?, ?, ?)
-    ");
+    '
+    );
     $insert->execute([
         $title,
         $message,
