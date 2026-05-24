@@ -162,6 +162,22 @@ function apiUserPayload(array $user): array
     ];
 }
 
+if (!function_exists('canUserPostShorts')) {
+    function canUserPostShorts(array $user): bool
+    {
+        $role = (string) ($user['role'] ?? '');
+        if ($role === 'super_admin') {
+            return true;
+        }
+
+        if ($role !== 'admin' && $role !== 'student') {
+            return false;
+        }
+
+        return !empty($user['can_post_shorts']);
+    }
+}
+
 function apiBool($value): int
 {
     return !empty($value) ? 1 : 0;
