@@ -151,6 +151,9 @@ function apiUserPayload(array $user): array
         'student_id' => $user['student_id'] ?? null,
         'membership' => $user['membership'] ?? null,
         'phone_number' => $user['phone_number'] ?? null,
+        'can_post_shorts' => canUserPostShorts($user) ? 1 : 0,
+        'shorts_authorized_by' => isset($user['shorts_authorized_by']) ? (int) $user['shorts_authorized_by'] : null,
+        'shorts_authorized_at' => $user['shorts_authorized_at'] ?? null,
         'profile_picture' => $user['profile_picture'] ?? null,
         'profile_picture_url' => !empty($user['profile_picture'])
             ? '/assets/uploads/profiles/' . $user['profile_picture']
@@ -608,7 +611,8 @@ function apiFetchVisibleNotices(PDO $pdo, array $user, array $filters = []): arr
             u.name AS author_name,
             CASE WHEN b.id IS NULL THEN 0 ELSE 1 END AS is_bookmarked,
             CASE WHEN nv.id IS NULL THEN 0 ELSE 1 END AS has_viewed,
-            COALESCE(na.status, '') AS acknowledgement_status
+            COALESCE(na.status, '') AS acknowledgement_status,
+            (SELECT COUNT(*) FROM notice_views all_nv WHERE all_nv.notice_id = n.id) AS view_count
         FROM notices n
         JOIN users u ON n.posted_by = u.id
         LEFT JOIN bookmarks b ON b.notice_id = n.id AND b.user_id = ?
@@ -628,6 +632,7 @@ function apiFetchVisibleNotices(PDO $pdo, array $user, array $filters = []): arr
     foreach ($notices as &$notice) {
         $notice['is_bookmarked'] = (int) $notice['is_bookmarked'];
         $notice['has_viewed'] = (int) $notice['has_viewed'];
+        $notice['view_count'] = isset($notice['view_count']) ? (int) $notice['view_count'] : 0;
         $notice['requires_acknowledgement'] = apiBool($notice['requires_acknowledgement'] ?? 0);
         $notice['is_pinned'] = apiBool($notice['is_pinned'] ?? 0);
     }
@@ -754,7 +759,7 @@ function apiFetchStudentDashboard(PDO $pdo, array $user): array
     ];
 }
 
-function apiFetchAdminDashboard(PDO $pdo, array $user): array
+function apiFetchAdminDashboard(PDO $pdo, array $user, string $analyticsRange = 'weekly'): array
 {
     $userRole = (string) ($user['role'] ?? 'admin');
     $userId = (int) $user['id'];
@@ -855,7 +860,234 @@ function apiFetchAdminDashboard(PDO $pdo, array $user): array
     return array_merge($summary, [
         'recent_notices' => $recentNoticeStmt->fetchAll(),
         'recent_students' => $recentStudentStmt->fetchAll(),
+        'analytics' => apiFetchAdminAnalytics($pdo, $user, $analyticsRange),
+        'reports' => apiFetchAdminReports($pdo, $user),
     ]);
+}
+
+function apiAnalyticsRangeConfig(string $range): array
+{
+    $normalized = in_array($range, ['daily', 'weekly', 'monthly'], true) ? $range : 'weekly';
+    if ($normalized === 'daily') {
+        return ['bucket' => 'DATE(ts)', 'format' => 'Y-m-d', 'interval' => 'P6D', 'step' => 'P1D'];
+    }
+    if ($normalized === 'monthly') {
+        return ['bucket' => "DATE_FORMAT(ts, '%Y-%m-01')", 'format' => 'Y-m-d', 'interval' => 'P5M', 'step' => 'P1M'];
+    }
+
+    return ['bucket' => "DATE_SUB(DATE(ts), INTERVAL WEEKDAY(ts) DAY)", 'format' => 'Y-m-d', 'interval' => 'P7W', 'step' => 'P1W'];
+}
+
+function apiBuildTimelineLabels(string $range): array
+{
+    $config = apiAnalyticsRangeConfig($range);
+    $now = new DateTime('now');
+    $start = (clone $now)->sub(new DateInterval($config['interval']));
+    $step = new DateInterval($config['step']);
+    $labels = [];
+
+    while ($start <= $now) {
+        $labels[] = $start->format($config['format']);
+        $start->add($step);
+    }
+
+    return $labels;
+}
+
+function apiUserScopeClause(array $user, string $noticeAlias = 'n', string $userAlias = 'u'): array
+{
+    if (($user['role'] ?? '') === 'super_admin') {
+        return ['', []];
+    }
+
+    if (($user['role'] ?? '') === 'admin') {
+        return [" WHERE $noticeAlias.posted_by = ? ", [(int) $user['id']]];
+    }
+
+    return [' WHERE 1 = 0 ', []];
+}
+
+function apiSeriesFromQuery(PDO $pdo, string $sql, array $params, string $range): array
+{
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute($params);
+    $rows = $stmt->fetchAll();
+    $map = [];
+    foreach ($rows as $row) {
+        $map[(string) $row['bucket_key']] = (int) $row['total'];
+    }
+
+    $labels = apiBuildTimelineLabels($range);
+    $points = [];
+    foreach ($labels as $label) {
+        $points[] = $map[$label] ?? 0;
+    }
+
+    return ['labels' => $labels, 'points' => $points];
+}
+
+function apiFetchAdminAnalytics(PDO $pdo, array $user, string $range = 'weekly'): array
+{
+    $range = in_array($range, ['daily', 'weekly', 'monthly'], true) ? $range : 'weekly';
+    $cfg = apiAnalyticsRangeConfig($range);
+    [$noticeScopeClause, $noticeScopeParams] = apiUserScopeClause($user, 'n', 'u');
+
+    $noticePostedSql = "
+        SELECT DATE_FORMAT(bucket.bucket_key, '%Y-%m-%d') AS bucket_key, bucket.total
+        FROM (
+            SELECT {$cfg['bucket']} AS bucket_key, COUNT(*) AS total
+            FROM notices n
+            {$noticeScopeClause}
+            GROUP BY {$cfg['bucket']}
+        ) bucket
+    ";
+
+    $loginSql = "
+        SELECT DATE_FORMAT(bucket.bucket_key, '%Y-%m-%d') AS bucket_key, bucket.total
+        FROM (
+            SELECT {$cfg['bucket']} AS bucket_key, COUNT(*) AS total
+            FROM user_activity_log ual
+            WHERE ual.action IN ('mobile_login', 'login', 'user_login')
+            GROUP BY {$cfg['bucket']}
+        ) bucket
+    ";
+
+    $viewsSql = "
+        SELECT DATE_FORMAT(bucket.bucket_key, '%Y-%m-%d') AS bucket_key, bucket.total
+        FROM (
+            SELECT {$cfg['bucket']} AS bucket_key, COUNT(*) AS total
+            FROM notice_views nv
+            JOIN notices n ON n.id = nv.notice_id
+            {$noticeScopeClause}
+            GROUP BY {$cfg['bucket']}
+        ) bucket
+    ";
+
+    $downloadsSql = "
+        SELECT DATE_FORMAT(bucket.bucket_key, '%Y-%m-%d') AS bucket_key, bucket.total
+        FROM (
+            SELECT {$cfg['bucket']} AS bucket_key, COUNT(*) AS total
+            FROM user_activity_log ual
+            WHERE ual.action IN ('notice_attachment_download', 'mobile_notice_attachment_download')
+            GROUP BY {$cfg['bucket']}
+        ) bucket
+    ";
+
+    $commentsSql = "
+        SELECT DATE_FORMAT(bucket.bucket_key, '%Y-%m-%d') AS bucket_key, bucket.total
+        FROM (
+            SELECT {$cfg['bucket']} AS bucket_key, COUNT(*) AS total
+            FROM notice_questions nq
+            JOIN notices n ON n.id = nq.notice_id
+            {$noticeScopeClause}
+            GROUP BY {$cfg['bucket']}
+        ) bucket
+    ";
+
+    $activeUsersSql = "
+        SELECT DATE_FORMAT(bucket.bucket_key, '%Y-%m-%d') AS bucket_key, bucket.total
+        FROM (
+            SELECT {$cfg['bucket']} AS bucket_key, COUNT(DISTINCT ual.user_id) AS total
+            FROM user_activity_log ual
+            GROUP BY {$cfg['bucket']}
+        ) bucket
+    ";
+
+    $notifReadSql = "
+        SELECT DATE_FORMAT(bucket.bucket_key, '%Y-%m-%d') AS bucket_key, bucket.total
+        FROM (
+            SELECT {$cfg['bucket']} AS bucket_key, COUNT(*) AS total
+            FROM notifications nof
+            WHERE nof.is_read = 1
+            GROUP BY {$cfg['bucket']}
+        ) bucket
+    ";
+
+    return [
+        'range' => $range,
+        'series' => [
+            'logins' => apiSeriesFromQuery($pdo, $loginSql, [], $range),
+            'notices_viewed' => apiSeriesFromQuery($pdo, $viewsSql, $noticeScopeParams, $range),
+            'notices_posted' => apiSeriesFromQuery($pdo, $noticePostedSql, $noticeScopeParams, $range),
+            'notice_downloads' => apiSeriesFromQuery($pdo, $downloadsSql, [], $range),
+            'notice_comments' => apiSeriesFromQuery($pdo, $commentsSql, $noticeScopeParams, $range),
+            'active_users' => apiSeriesFromQuery($pdo, $activeUsersSql, [], $range),
+            'notifications_read' => apiSeriesFromQuery($pdo, $notifReadSql, [], $range),
+        ],
+    ];
+}
+
+function apiFetchAdminReports(PDO $pdo, array $user): array
+{
+    [$noticeScopeClause, $noticeScopeParams] = apiUserScopeClause($user, 'n', 'u');
+
+    $totalStmt = $pdo->prepare("SELECT COUNT(*) FROM notices n " . $noticeScopeClause);
+    $totalStmt->execute($noticeScopeParams);
+    $totalNotices = (int) $totalStmt->fetchColumn();
+
+    $viewsPerNoticeStmt = $pdo->prepare("
+        SELECT n.id, n.title, COUNT(nv.id) AS views
+        FROM notices n
+        LEFT JOIN notice_views nv ON nv.notice_id = n.id
+        " . $noticeScopeClause . "
+        GROUP BY n.id, n.title
+        ORDER BY views DESC, n.created_at DESC
+        LIMIT 25
+    ");
+    $viewsPerNoticeStmt->execute($noticeScopeParams);
+
+    $engagementStmt = $pdo->prepare("
+        SELECT u.id, u.name, u.email,
+               COUNT(DISTINCT nv.id) AS views,
+               COUNT(DISTINCT b.id) AS bookmarks,
+               COUNT(DISTINCT nq.id) AS comments,
+               (COUNT(DISTINCT nv.id) + COUNT(DISTINCT b.id) + COUNT(DISTINCT nq.id)) AS interactions
+        FROM users u
+        LEFT JOIN notice_views nv ON nv.user_id = u.id
+        LEFT JOIN bookmarks b ON b.user_id = u.id
+        LEFT JOIN notice_questions nq ON nq.asked_by = u.id
+        WHERE u.is_active = 1
+        GROUP BY u.id, u.name, u.email
+        ORDER BY interactions DESC, u.name ASC
+        LIMIT 30
+    ");
+    $engagementStmt->execute();
+
+    $departmentActivityStmt = $pdo->prepare("
+        SELECT d.id, d.name,
+               COUNT(DISTINCT n.id) AS notices_posted,
+               COUNT(DISTINCT nv.id) AS notice_views,
+               COUNT(DISTINCT nq.id) AS notice_comments,
+               (COUNT(DISTINCT nv.id) + COUNT(DISTINCT nq.id)) AS engagements
+        FROM departments d
+        LEFT JOIN notices n ON n.department_id = d.id
+        LEFT JOIN notice_views nv ON nv.notice_id = n.id
+        LEFT JOIN notice_questions nq ON nq.notice_id = n.id
+        GROUP BY d.id, d.name
+        ORDER BY engagements DESC, notices_posted DESC, d.name ASC
+    ");
+    $departmentActivityStmt->execute();
+
+    return [
+        'total_notices_posted' => $totalNotices,
+        'views_per_notice' => $viewsPerNoticeStmt->fetchAll(),
+        'most_viewed_notices' => (function () use ($pdo, $noticeScopeClause, $noticeScopeParams) {
+            $stmt = $pdo->prepare("
+                SELECT n.id, n.title, COUNT(nv.id) AS views
+                FROM notices n
+                LEFT JOIN notice_views nv ON nv.notice_id = n.id
+                " . $noticeScopeClause . "
+                GROUP BY n.id, n.title
+                ORDER BY views DESC, n.created_at DESC
+                LIMIT 10
+            ");
+            $stmt->execute($noticeScopeParams);
+            return $stmt->fetchAll();
+        })(),
+        'user_engagement' => $engagementStmt->fetchAll(),
+        'department_activity' => $departmentActivityStmt->fetchAll(),
+        'updated_at' => date('Y-m-d H:i:s'),
+    ];
 }
 
 function apiFetchAdminNotices(PDO $pdo, array $user): array

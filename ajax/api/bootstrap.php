@@ -6,6 +6,7 @@ apiRequireMethod(['GET']);
 
 try {
     $user = apiFetchAuthenticatedUser($pdo, $_GET);
+    $analyticsRange = trim((string) ($_GET['analytics_range'] ?? 'weekly'));
 
     $notificationStmt = $pdo->prepare('SELECT COUNT(*) FROM notifications WHERE user_id = ? AND is_read = 0');
     $notificationStmt->execute([(int) $user['id']]);
@@ -18,7 +19,7 @@ try {
         'categories' => getAvailableNoticeCategories(),
         'dashboard' => ($user['role'] ?? '') === 'student'
             ? apiFetchStudentDashboard($pdo, $user)
-            : apiFetchAdminDashboard($pdo, $user),
+            : apiFetchAdminDashboard($pdo, $user, $analyticsRange),
     ]);
 } catch (PDOException $e) {
     apiRespond(500, ['success' => false, 'error' => 'Unable to load dashboard data right now']);

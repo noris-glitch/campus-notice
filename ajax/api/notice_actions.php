@@ -52,7 +52,7 @@ try {
             'success' => true,
             'notice' => $notices[0],
             'comments' => $commentStmt->fetchAll(),
-            'can_comment' => ($user['role'] ?? '') === 'student',
+            'can_comment' => in_array(($user['role'] ?? ''), ['student', 'admin'], true),
             'can_moderate_comments' => ($user['role'] ?? '') === 'super_admin',
         ]);
     }
@@ -88,8 +88,8 @@ try {
     }
 
     if ($action === 'add_comment') {
-        if (($user['role'] ?? '') !== 'student') {
-            apiRespond(403, ['success' => false, 'error' => 'Only students can post notice comments']);
+        if (!in_array(($user['role'] ?? ''), ['student', 'admin'], true)) {
+            apiRespond(403, ['success' => false, 'error' => 'Only students and admins can post notice comments']);
         }
 
         $comment = trim((string) ($data['comment'] ?? ''));
