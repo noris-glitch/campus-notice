@@ -14,6 +14,11 @@ if(isset($_SESSION['user_id'])) {
 }
 
 $error = '';
+$landingPage = featureLandingPageSettings($pdo);
+$landingBackgroundColor = htmlspecialchars($landingPage['background_color'] ?? '#17324D', ENT_QUOTES, 'UTF-8');
+$landingBackgroundImage = !empty($landingPage['background_image_url'])
+    ? "url('" . htmlspecialchars($landingPage['background_image_url'], ENT_QUOTES, 'UTF-8') . "')"
+    : 'none';
 
 if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     $email = trim($_POST['email']);
@@ -66,8 +71,8 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             align-items: center;
             justify-content: center;
             position: relative;
-            /* JOOUST Administration Block Background */
-            background-image: url('assets/images/admin-block.jpg');
+            background-color: <?php echo $landingBackgroundColor; ?>;
+            background-image: <?php echo $landingBackgroundImage; ?>;
             background-size: cover;
             background-position: center;
             background-attachment: fixed;

@@ -153,6 +153,18 @@ if (!function_exists('ensureFeatureSchema')) {
         ");
 
         $pdo->exec("
+            CREATE TABLE IF NOT EXISTS `site_settings` (
+                `setting_key` VARCHAR(120) NOT NULL,
+                `setting_value` LONGTEXT NULL,
+                `updated_by` INT UNSIGNED NULL,
+                `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                PRIMARY KEY (`setting_key`),
+                KEY `idx_site_settings_updated_by` (`updated_by`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        ");
+
+        $pdo->exec("
             CREATE TABLE IF NOT EXISTS `notice_deliveries` (
                 `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
                 `notice_id` INT UNSIGNED NOT NULL,
@@ -1277,6 +1289,86 @@ if (!function_exists('resolveFacultyId')) {
         $stmt->execute([$value]);
         $result = $stmt->fetchColumn();
         return $result ? (int) $result : null;
+    }
+}
+
+if (!function_exists('featureNormalizeHexColor')) {
+    function featureNormalizeHexColor(?string $rawValue): ?string
+    {
+        $value = strtoupper(trim((string) $rawValue));
+        if ($value === '') {
+            return null;
+        }
+
+        if (preg_match('/^#?[0-9A-F]{6}$/', $value) !== 1) {
+            return null;
+        }
+
+        return '#' . ltrim($value, '#');
+    }
+}
+
+if (!function_exists('featureGetSiteSetting')) {
+    function featureGetSiteSetting(PDO $pdo, string $key, ?string $default = null): ?string
+    {
+        if (!featureTableExists($pdo, 'site_settings')) {
+            return $default;
+        }
+
+        try {
+            $stmt = $pdo->prepare('SELECT setting_value FROM site_settings WHERE setting_key = ? LIMIT 1');
+            $stmt->execute([$key]);
+            $value = $stmt->fetchColumn();
+            return $value !== false ? (string) $value : $default;
+        } catch (PDOException $e) {
+            return $default;
+        }
+    }
+}
+
+if (!function_exists('featureSetSiteSetting')) {
+    function featureSetSiteSetting(PDO $pdo, string $key, ?string $value, ?int $updatedBy = null): void
+    {
+        if (!featureTableExists($pdo, 'site_settings')) {
+            return;
+        }
+
+        $stmt = $pdo->prepare("
+            INSERT INTO site_settings (setting_key, setting_value, updated_by)
+            VALUES (?, ?, ?)
+            ON DUPLICATE KEY UPDATE
+                setting_value = VALUES(setting_value),
+                updated_by = VALUES(updated_by),
+                updated_at = NOW()
+        ");
+        $stmt->execute([$key, $value, $updatedBy]);
+    }
+}
+
+if (!function_exists('featureDeleteSiteSetting')) {
+    function featureDeleteSiteSetting(PDO $pdo, string $key): void
+    {
+        if (!featureTableExists($pdo, 'site_settings')) {
+            return;
+        }
+
+        $stmt = $pdo->prepare('DELETE FROM site_settings WHERE setting_key = ?');
+        $stmt->execute([$key]);
+    }
+}
+
+if (!function_exists('featureLandingPageSettings')) {
+    function featureLandingPageSettings(PDO $pdo): array
+    {
+        $backgroundColor = featureNormalizeHexColor(featureGetSiteSetting($pdo, 'landing_background_color', '#17324D')) ?: '#17324D';
+        $backgroundImage = trim((string) featureGetSiteSetting($pdo, 'landing_background_image', ''));
+        $backgroundImage = $backgroundImage !== '' ? $backgroundImage : null;
+
+        return [
+            'background_color' => $backgroundColor,
+            'background_image' => $backgroundImage,
+            'background_image_url' => $backgroundImage ? '/assets/uploads/branding/' . $backgroundImage : null,
+        ];
     }
 }
 
