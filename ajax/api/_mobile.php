@@ -913,29 +913,81 @@ function apiAnalyticsRangeConfig(string $range): array
 {
     $normalized = in_array($range, ['daily', 'weekly', 'monthly'], true) ? $range : 'weekly';
     if ($normalized === 'daily') {
-        return ['bucket' => 'DATE(ts)', 'format' => 'Y-m-d', 'interval' => 'P6D', 'step' => 'P1D'];
+        return ['format' => 'Y-m-d', 'interval' => 'P6D', 'step' => 'P1D'];
     }
     if ($normalized === 'monthly') {
-        return ['bucket' => "DATE_FORMAT(ts, '%Y-%m-01')", 'format' => 'Y-m-d', 'interval' => 'P5M', 'step' => 'P1M'];
+        return ['format' => 'Y-m-01', 'interval' => 'P5M', 'step' => 'P1M'];
     }
 
-    return ['bucket' => "DATE_SUB(DATE(ts), INTERVAL WEEKDAY(ts) DAY)", 'format' => 'Y-m-d', 'interval' => 'P7W', 'step' => 'P1W'];
+    return ['format' => 'Y-m-d', 'interval' => 'P7W', 'step' => 'P1W'];
 }
 
 function apiBuildTimelineLabels(string $range): array
 {
     $config = apiAnalyticsRangeConfig($range);
-    $now = new DateTime('now');
-    $start = (clone $now)->sub(new DateInterval($config['interval']));
-    $step = new DateInterval($config['step']);
     $labels = [];
+    if ($range === 'monthly') {
+        $cursor = new DateTimeImmutable('first day of this month');
+        $cursor = $cursor->sub(new DateInterval($config['interval']));
+        $step = new DateInterval($config['step']);
+        while (count($labels) < 6) {
+            $labels[] = $cursor->format($config['format']);
+            $cursor = $cursor->add($step);
+        }
+        return $labels;
+    }
 
+    if ($range === 'weekly') {
+        $cursor = new DateTimeImmutable('monday this week');
+        $cursor = $cursor->sub(new DateInterval('P7W'));
+        $step = new DateInterval($config['step']);
+        while (count($labels) < 8) {
+            $labels[] = $cursor->format($config['format']);
+            $cursor = $cursor->add($step);
+        }
+        return $labels;
+    }
+
+    $now = new DateTimeImmutable('today');
+    $start = $now->sub(new DateInterval($config['interval']));
+    $step = new DateInterval($config['step']);
     while ($start <= $now) {
         $labels[] = $start->format($config['format']);
-        $start->add($step);
+        $start = $start->add($step);
     }
 
     return $labels;
+}
+
+function apiTimeBucketExpression(string $range, string $column): string
+{
+    $normalized = in_array($range, ['daily', 'weekly', 'monthly'], true) ? $range : 'weekly';
+
+    if ($normalized === 'monthly') {
+        return "DATE_FORMAT($column, '%Y-%m-01')";
+    }
+
+    if ($normalized === 'weekly') {
+        return "DATE_SUB(DATE($column), INTERVAL WEEKDAY($column) DAY)";
+    }
+
+    return "DATE($column)";
+}
+
+function apiSeriesQueryForRange(string $range, string $column, string $table, string $alias, string $whereClause = '', string $groupByPrefix = '', string $extraSelect = 'COUNT(*) AS total'): string
+{
+    $bucket = apiTimeBucketExpression($range, $column);
+    $groupBy = $groupByPrefix !== '' ? $groupByPrefix . $bucket : $bucket;
+
+    return "
+        SELECT bucket.bucket_key AS bucket_key, bucket.total
+        FROM (
+            SELECT $bucket AS bucket_key, $extraSelect
+            FROM $table $alias
+            $whereClause
+            GROUP BY $groupBy
+        ) bucket
+    ";
 }
 
 function apiUserScopeClause(array $user, string $noticeAlias = 'n', string $userAlias = 'u'): array
@@ -973,7 +1025,6 @@ function apiSeriesFromQuery(PDO $pdo, string $sql, array $params, string $range)
 function apiFetchAdminAnalytics(PDO $pdo, array $user, string $range = 'weekly'): array
 {
     $range = in_array($range, ['daily', 'weekly', 'monthly'], true) ? $range : 'weekly';
-    $cfg = apiAnalyticsRangeConfig($range);
     [$noticeScopeClause, $noticeScopeParams] = apiUserScopeClause($user, 'n', 'u');
     $labels = apiBuildTimelineLabels($range);
     $zeroSeries = ['labels' => $labels, 'points' => array_fill(0, count($labels), 0)];
@@ -984,87 +1035,66 @@ function apiFetchAdminAnalytics(PDO $pdo, array $user, string $range = 'weekly')
     $hasActivityLog = featureTableExists($pdo, 'user_activity_log');
     $hasNoticeQuestions = featureTableExists($pdo, 'notice_questions');
 
-    $noticePostedSql = "
-        SELECT DATE_FORMAT(bucket.bucket_key, '%Y-%m-%d') AS bucket_key, bucket.total
-        FROM (
-            SELECT {$cfg['bucket']} AS bucket_key, COUNT(*) AS total
-            FROM notices n
-            {$noticeScopeClause}
-            GROUP BY {$cfg['bucket']}
-        ) bucket
-    ";
-
-    $loginSql = "
-        SELECT DATE_FORMAT(bucket.bucket_key, '%Y-%m-%d') AS bucket_key, bucket.total
-        FROM (
-            SELECT {$cfg['bucket']} AS bucket_key, COUNT(*) AS total
-            FROM user_activity_log ual
-            WHERE ual.action IN ('mobile_login', 'login', 'user_login')
-            GROUP BY {$cfg['bucket']}
-        ) bucket
-    ";
-
-    $viewsSql = "
-        SELECT DATE_FORMAT(bucket.bucket_key, '%Y-%m-%d') AS bucket_key, bucket.total
-        FROM (
-            SELECT {$cfg['bucket']} AS bucket_key, COUNT(*) AS total
-            FROM notice_views nv
-            JOIN notices n ON n.id = nv.notice_id
-            {$noticeScopeClause}
-            GROUP BY {$cfg['bucket']}
-        ) bucket
-    ";
-
-    $downloadsSql = "
-        SELECT DATE_FORMAT(bucket.bucket_key, '%Y-%m-%d') AS bucket_key, bucket.total
-        FROM (
-            SELECT {$cfg['bucket']} AS bucket_key, COUNT(*) AS total
-            FROM user_activity_log ual
-            WHERE ual.action IN ('notice_attachment_download', 'mobile_notice_attachment_download')
-            GROUP BY {$cfg['bucket']}
-        ) bucket
-    ";
-
-    $commentsSql = "
-        SELECT DATE_FORMAT(bucket.bucket_key, '%Y-%m-%d') AS bucket_key, bucket.total
-        FROM (
-            SELECT {$cfg['bucket']} AS bucket_key, COUNT(*) AS total
-            FROM notice_questions nq
-            JOIN notices n ON n.id = nq.notice_id
-            {$noticeScopeClause}
-            GROUP BY {$cfg['bucket']}
-        ) bucket
-    ";
-
-    $activeUsersSql = "
-        SELECT DATE_FORMAT(bucket.bucket_key, '%Y-%m-%d') AS bucket_key, bucket.total
-        FROM (
-            SELECT {$cfg['bucket']} AS bucket_key, COUNT(DISTINCT ual.user_id) AS total
-            FROM user_activity_log ual
-            GROUP BY {$cfg['bucket']}
-        ) bucket
-    ";
-
-    $notifReadSql = "
-        SELECT DATE_FORMAT(bucket.bucket_key, '%Y-%m-%d') AS bucket_key, bucket.total
-        FROM (
-            SELECT {$cfg['bucket']} AS bucket_key, COUNT(*) AS total
-            FROM notifications nof
-            WHERE nof.is_read = 1
-            GROUP BY {$cfg['bucket']}
-        ) bucket
-    ";
+    $noticeBucket = apiTimeBucketExpression($range, 'n.created_at');
+    $loginBucket = apiTimeBucketExpression($range, 'ual.created_at');
+    $viewBucket = apiTimeBucketExpression($range, 'nv.created_at');
+    $commentBucket = apiTimeBucketExpression($range, 'nq.created_at');
+    $notifBucket = apiTimeBucketExpression($range, 'nof.created_at');
 
     return [
         'range' => $range,
         'series' => [
-            'logins' => $hasActivityLog ? apiSeriesFromQuery($pdo, $loginSql, [], $range) : $zeroSeries,
-            'notices_viewed' => ($hasNotices && $hasNoticeViews) ? apiSeriesFromQuery($pdo, $viewsSql, $noticeScopeParams, $range) : $zeroSeries,
-            'notices_posted' => $hasNotices ? apiSeriesFromQuery($pdo, $noticePostedSql, $noticeScopeParams, $range) : $zeroSeries,
-            'notice_downloads' => $hasActivityLog ? apiSeriesFromQuery($pdo, $downloadsSql, [], $range) : $zeroSeries,
-            'notice_comments' => ($hasNotices && $hasNoticeQuestions) ? apiSeriesFromQuery($pdo, $commentsSql, $noticeScopeParams, $range) : $zeroSeries,
-            'active_users' => $hasActivityLog ? apiSeriesFromQuery($pdo, $activeUsersSql, [], $range) : $zeroSeries,
-            'notifications_read' => $hasNotifications ? apiSeriesFromQuery($pdo, $notifReadSql, [], $range) : $zeroSeries,
+            'logins' => $hasActivityLog ? apiSeriesFromQuery($pdo, apiSeriesQueryForRange(
+                $range,
+                'ual.created_at',
+                'user_activity_log',
+                'ual',
+                "WHERE ual.action IN ('mobile_login', 'login', 'user_login')"
+            ), [], $range) : $zeroSeries,
+            'notices_viewed' => ($hasNotices && $hasNoticeViews) ? apiSeriesFromQuery($pdo, apiSeriesQueryForRange(
+                $range,
+                'nv.created_at',
+                'notice_views',
+                'nv',
+                "JOIN notices n ON n.id = nv.notice_id {$noticeScopeClause}"
+            ), $noticeScopeParams, $range) : $zeroSeries,
+            'notices_posted' => $hasNotices ? apiSeriesFromQuery($pdo, apiSeriesQueryForRange(
+                $range,
+                'n.created_at',
+                'notices',
+                'n',
+                $noticeScopeClause
+            ), $noticeScopeParams, $range) : $zeroSeries,
+            'notice_downloads' => $hasActivityLog ? apiSeriesFromQuery($pdo, apiSeriesQueryForRange(
+                $range,
+                'ual.created_at',
+                'user_activity_log',
+                'ual',
+                "WHERE ual.action IN ('notice_attachment_download', 'mobile_notice_attachment_download')"
+            ), [], $range) : $zeroSeries,
+            'notice_comments' => ($hasNotices && $hasNoticeQuestions) ? apiSeriesFromQuery($pdo, apiSeriesQueryForRange(
+                $range,
+                'nq.created_at',
+                'notice_questions',
+                'nq',
+                "JOIN notices n ON n.id = nq.notice_id {$noticeScopeClause}"
+            ), $noticeScopeParams, $range) : $zeroSeries,
+            'active_users' => $hasActivityLog ? apiSeriesFromQuery($pdo, apiSeriesQueryForRange(
+                $range,
+                'ual.created_at',
+                'user_activity_log',
+                'ual',
+                '',
+                '',
+                'COUNT(DISTINCT ual.user_id) AS total'
+            ), [], $range) : $zeroSeries,
+            'notifications_read' => $hasNotifications ? apiSeriesFromQuery($pdo, apiSeriesQueryForRange(
+                $range,
+                'nof.created_at',
+                'notifications',
+                'nof',
+                "WHERE nof.is_read = 1"
+            ), [], $range) : $zeroSeries,
         ],
     ];
 }
